@@ -1,0 +1,31 @@
+{
+  "name": "88api-nano-banana",
+  "version": "0.1.0",
+  "description": "\u6765\u81ea 88api.ai Token \u805a\u5408\u7ad9\u7684 Codex \u4e13\u7528 Nano Banana \u751f\u56fe\u63d2\u4ef6\uff0c\u901a\u8fc7 Anthropic Messages \u534f\u8bae\u8c03\u7528 Gemini \u56fe\u7247\u6a21\u578b\u3002",
+  "author": {
+    "name": "88api.ai"
+  },
+  "homepage": "https://88api.ai/",
+  "repository": "https://github.com/blackdm666/88api-Nano-Banana",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "88api-Nano-Banana",
+    "shortDescription": "Anthropic \u534f\u8bae Gemini \u751f\u56fe\u4e0e\u56fe\u7247\u7f16\u8f91\u3002",
+    "longDescription": "\u901a\u8fc7 88api.ai \u7684 Anthropic Messages \u517c\u5bb9\u63a5\u53e3\u8c03\u7528 gemini-3-pro-image \u548c gemini-3.1-flash-image\uff0c\u652f\u6301\u6587\u751f\u56fe\u3001\u53c2\u8003\u56fe\u7f16\u8f91\u3001\u6a21\u578b\u5207\u6362\u3001\u72ec\u7acb Key \u914d\u7f6e\u548c\u8de8\u5e73\u53f0\u56fe\u7247\u4fdd\u5b58\u3002",
+    "developerName": "88api.ai",
+    "category": "Productivity",
+    "capabilities": [
+      "Write"
+    ],
+    "brandColor": "#18A9B0",
+    "composerIcon": "./assets/composer-icon.png",
+    "logo": "./assets/plugin-logo.png",
+    "logoDark": "./assets/plugin-logo-dark.png",
+    "websiteURL": "https://88api.ai/",
+    "defaultPrompt": [
+      "\u4f7f\u7528 88api-Nano-Banana \u751f\u6210\u4e00\u5f20\u56fe\u7247\u3002",
+      "\u4f7f\u7528 Gemini Flash Image \u6839\u636e\u6211\u7684\u63cf\u8ff0\u751f\u6210\u56fe\u7247\u3002",
+      "\u4f7f\u7528 Gemini Pro Image \u7f16\u8f91\u8fd9\u5f20\u53c2\u8003\u56fe\u3002"
+    ]
+  }
+}

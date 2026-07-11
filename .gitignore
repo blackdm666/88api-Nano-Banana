@@ -1,0 +1,20 @@
+# Local secrets and machine-specific configuration
+.env
+.env.*
+*.key
+*.pem
+
+# Generated images and diagnostics
+outputs/
+output/
+logs/
+tmp/
+temp/
+*.log
+*.tmp
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,4 @@
+interface:
+  display_name: "88API Nano Banana"
+  short_description: "通过 88api.ai Anthropic 协议生成和编辑 Gemini 图片"
+  default_prompt: "使用 $88api-nano-banana 生成一张图片。"

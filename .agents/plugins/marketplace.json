@@ -1,0 +1,20 @@
+{
+  "name": "88api-nano-banana",
+  "interface": {
+    "displayName": "88API Nano Banana"
+  },
+  "plugins": [
+    {
+      "name": "88api-nano-banana",
+      "source": {
+        "source": "local",
+        "path": "./plugins/88api-nano-banana"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
