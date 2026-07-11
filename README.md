@@ -19,20 +19,25 @@ API 固定使用：
 - Messages 端点：`https://88api.ai/v1/messages`
 - Anthropic 版本头：`2023-06-01`
 
-## 初次使用：注册并创建 88API Key
+## 创建并配置 88API Key
 
-1. 打开 [88api.ai](https://88api.ai/)，注册账号并登录控制台。
-2. 进入左侧的“API 密钥”，点击右上角“创建 API 密钥”。
-3. 名称可以自定义；分组必须选择能够通过 **Anthropic 协议**调用 `gemini-3.1-flash-image` 和/或 `gemini-3-pro-image` 的 Gemini 生图分组。`88api-image-gen` 使用的 Image2 专用 Key 不能直接代替。
-4. **数量填写 1。** Nano Banana 当前只保存一个 Key，不需要批量创建。下面截图来自批量创建演示，图中的数量 `10` 不适用于本插件，请不要照填。
+### 1. 注册账号
 
-![在 88api.ai 创建 API 密钥](docs/assets/88api-create-anthropic-gemini-key.png)
+打开 [88api.ai](https://88api.ai/) 注册账号并登录。
 
-5. 保存后返回 API 密钥列表，复制刚创建的 Key。不要把完整 Key 发到公开聊天、Issue、日志或 GitHub 仓库。
+### 2. 创建 API Key
 
-![在 88api.ai 复制 API 密钥](docs/assets/88api-copy-key.png)
+进入“API 密钥”，点击“创建 API 密钥”，按照下图操作。
 
-6. 把 Key 配置到插件。若把仓库地址交给 Codex，Codex 应先检查配置；发现没有 Key 时，应提醒完成以上步骤，而不是直接发起生图请求。
+> Nano Banana 只需要一个 Key，数量填写 `1`。
+
+![创建 API Key](docs/assets/88api-create-anthropic-gemini-key.png)
+
+### 3. 复制并配置 Key
+
+创建完成后复制 Key，并提供给 Codex，让 Codex 完成插件配置。
+
+![复制 API Key](docs/assets/88api-copy-key.png)
 
 ## 快速安装
 
