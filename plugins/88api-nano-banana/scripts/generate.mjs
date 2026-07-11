@@ -16,6 +16,7 @@ import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path
 const API_ROOT = "https://88api.ai";
 const MESSAGES_URL = `${API_ROOT}/v1/messages`;
 const ANTHROPIC_VERSION = "2023-06-01";
+const PLUGIN_VERSION = "1.0.0";
 const CONFIG_PATH = join(homedir(), ".codex", "88api-nano-banana-config.json");
 const DEFAULT_OUTPUT_DIR = join(homedir(), "Pictures", "88api-nano-banana");
 const DEFAULT_MODEL = "gemini-3.1-flash-image";
@@ -404,7 +405,7 @@ async function callMessages({ apiKey, body }) {
 }
 
 function printHelp() {
-  console.log(`88api-Nano-Banana 0.1.0\n\n配置：\n  --get-config\n  --config-path\n  --set-key <KEY>\n  --set-model <MODEL>\n  --list-models\n\n生图：\n  --prompt <TEXT> [--model MODEL] [--image PATH ...] [--aspect RATIO] [--resolution 1K] [--count 1..${MAX_IMAGES}] [--output-dir DIR]\n\n验证：\n  --dry-run\n  --self-test\n\n协议：Anthropic Messages\n端点：${MESSAGES_URL}`);
+  console.log(`88api-Nano-Banana ${PLUGIN_VERSION}\n\n配置：\n  --get-config\n  --config-path\n  --set-key <KEY>\n  --set-model <MODEL>\n  --list-models\n\n生图：\n  --prompt <TEXT> [--model MODEL] [--image PATH ...] [--aspect RATIO] [--resolution 1K] [--count 1..${MAX_IMAGES}] [--output-dir DIR]\n\n验证：\n  --dry-run\n  --self-test\n\n协议：Anthropic Messages\n端点：${MESSAGES_URL}`);
 }
 
 function runSelfTest() {
