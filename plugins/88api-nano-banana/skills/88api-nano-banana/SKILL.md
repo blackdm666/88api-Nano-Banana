@@ -11,7 +11,7 @@ Use the bundled `scripts/generate.mjs`. Resolve the plugin root from this instal
 
 1. Confirm Node.js 18 or newer with `node --version`.
 2. Run `node "<PLUGIN_ROOT>/scripts/generate.mjs" --get-config`.
-3. If `已配置Key` is `false`, stop before generation. Tell the user to create an Anthropic-protocol Gemini image group Key at `https://88api.ai/`.
+3. If `已配置Key` is `false`, stop before generation. Tell the user to register or sign in at `https://88api.ai/`, open **API 密钥**, and create one Key in a group that can call the selected Gemini image model through the Anthropic protocol. Point the user to `https://github.com/blackdm666/88api-Nano-Banana#初次使用注册并创建-88api-key` for the illustrated tutorial. An Image2-only Key is not sufficient.
 4. Save the Key only after the user supplies or directly enters it:
 
 ```bash
