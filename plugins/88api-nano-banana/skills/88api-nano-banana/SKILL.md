@@ -1,6 +1,6 @@
 ---
 name: 88api-nano-banana
-description: Generate or edit raster images through 88api.ai using the Anthropic Messages protocol and the gemini-3-pro-image or gemini-3.1-flash-image models. Use when the user asks Nano Banana, Gemini image generation, Gemini image editing, reference-image transformation, or explicitly asks to use 88api.ai with Anthropic protocol for an image task.
+description: Generate or edit raster images through 88api.ai with Gemini image models over the OpenAI Images API. Use for Nano Banana generation, reference-image editing, or very long Base64/Data-URI image responses.
 ---
 
 # 88API Nano Banana
@@ -10,32 +10,36 @@ Use the bundled `scripts/generate.mjs`. Resolve the plugin root from this instal
 ## First use
 
 1. Confirm Node.js 18 or newer with `node --version`.
-2. Run `node "<PLUGIN_ROOT>/scripts/generate.mjs" --get-config`.
-3. If `已配置Key` is `false`, stop before generation. Tell the user to register or sign in at `https://88api.ai/`, open **API 密钥**, and create one Key in a group that can call the selected Gemini image model through the Anthropic protocol. Point the user to `https://github.com/blackdm666/88api-Nano-Banana#创建并配置-88api-key` for the illustrated tutorial. An Image2-only Key is not sufficient.
+2. Run `node "<PLUGIN_ROOT>/scripts/generate.mjs" --get-config` before generation.
+3. If `已配置Key` is `false`, stop before generation. Tell the user to sign in at `https://88api.ai/`, open **API 密钥**, and create one Key that can call the selected Gemini image model through OpenAI Images. Point to `https://github.com/blackdm666/88api-Nano-Banana#创建并配置-88api-key` for the illustrated tutorial.
 4. Save the Key only after the user supplies or directly enters it:
 
 ```bash
 node "<PLUGIN_ROOT>/scripts/generate.mjs" --set-key "<YOUR_88API_GEMINI_IMAGE_KEY>"
 ```
 
-Never reuse `~/.codex/88api-image-gen-config.json`; this plugin uses the independent file `~/.codex/88api-nano-banana-config.json`. Never print, log, commit, or place a real Key in repository files.
+The plugin uses `~/.codex/88api-nano-banana-config.json`. Never print, log, commit, or place a real Key in repository files.
+
+## API contract
+
+OpenAI Images is the plugin's only protocol. There is no protocol selector or automatic fallback.
+
+- Generation: `POST https://88api.ai/v1/images/generations` with JSON.
+- Reference-image editing: `POST https://88api.ai/v1/images/edits` with multipart `image[]` fields in input order.
+- Authentication: `Authorization: Bearer <KEY>`.
+- Response: prefer standard `data[].b64_json`, then `data[].url`; bounded long-text Data URI parsing is a compatibility fallback.
+
+Never silently switch endpoints, models, or resend an accepted/unknown paid request.
 
 ## Model selection
 
 - Default to `gemini-3.1-flash-image` for normal generation, iteration, and lower latency.
 - Use `gemini-3-pro-image` when the user prioritizes composition, typography, complex editing, or maximum quality.
-- Never route through GPT-5.5, OpenAI Images, OpenAI Chat Completions, or Google native protocol.
-- Never switch models or resend an accepted/unknown paid request automatically.
-
-Persist a preferred model when requested:
-
-```bash
-node "<PLUGIN_ROOT>/scripts/generate.mjs" --set-model gemini-3-pro-image
-```
+- Persist a model only when requested with `--set-model gemini-3-pro-image`.
 
 ## Generate an image
 
-Convert the user's request into a complete image prompt locally in Codex. Do not call a separate text model for prompt optimization.
+Convert the request into a complete image prompt locally in Codex. Do not call a separate text model for prompt optimization.
 
 ```bash
 node "<PLUGIN_ROOT>/scripts/generate.mjs" --prompt "<PROMPT>" --aspect 16:9 --resolution 1K
@@ -45,38 +49,45 @@ Optional flags:
 
 - `--model gemini-3-pro-image|gemini-3.1-flash-image`
 - `--aspect 1:1|2:3|3:2|3:4|4:3|4:5|5:4|9:16|16:9|21:9`
-- `--resolution 512|1K|2K|4K` (`512` is allowed only for Flash)
-- `--count 1..4` (each image is a separate paid request)
+- `--resolution 512|1K|2K|4K` (`512` is Flash-only)
+- `--count 1..4` (each count is a separate paid request)
 - `--output-dir "<ABSOLUTE_DIRECTORY>"`
 
-Start with `--count 1`. Warn before multiple images: local memory failure or a Codex crash does not cancel a request already accepted by 88api.ai, and accepted/completed cloud tasks may still be billed even when the local image was not saved.
+Start with `--count 1`. Warn before multiple requests: a local memory failure, crash, or lost connection does not cancel a cloud request already accepted by 88api.ai, and it may still be billed.
+
+Aspect and resolution are requested targets. Verify the saved file when exact dimensions matter; 88API or the upstream model may return a different size.
 
 ## Edit with reference images
 
-Pass one or more local PNG, JPEG, WebP, or GIF paths. The script embeds each input as an Anthropic base64 image content block in argument order.
+Pass local PNG, JPEG, WebP, or GIF paths in input order. The script sends them as multipart `image[]` values to the Images edits endpoint.
 
 ```bash
 node "<PLUGIN_ROOT>/scripts/generate.mjs" --image "<REFERENCE_1>" --image "<REFERENCE_2>" --prompt "<EDIT_INSTRUCTION>" --aspect 9:16 --resolution 1K
 ```
 
-Keep total inline reference data under 20 MB. Do not combine or alter reference images before upload unless the user asks.
+Keep total reference data under 20 MB. Do not combine or alter reference images before upload unless the user asks.
 
 ## Safe verification
 
-Use these checks without calling the paid API:
+These checks do not call the paid API:
 
 ```bash
 node --check "<PLUGIN_ROOT>/scripts/generate.mjs"
 node "<PLUGIN_ROOT>/scripts/generate.mjs" --self-test
-node "<PLUGIN_ROOT>/scripts/generate.mjs" --prompt "测试提示词" --dry-run
+node "<PLUGIN_ROOT>/scripts/generate.mjs" --prompt "测试" --dry-run
+node "<PLUGIN_ROOT>/scripts/generate.mjs" --image "<REFERENCE>" --prompt "测试编辑" --dry-run
 ```
 
-`--dry-run` prints a sanitized Anthropic request preview and never includes the Key or reference-image Base64.
+Dry runs hide the Key and never include reference-image bytes or Base64.
+
+## Long image responses
+
+The normal response is structured OpenAI Images data. If 88API instead wraps an image in a very long Markdown/Data URI string, the script scans it with bounded memory, removes Base64 from summaries, accepts standard and URL-safe Base64, and selects the last text-embedded image as the final result.
 
 ## Results and errors
 
-- After success, show each saved image in Codex using an absolute-path Markdown image tag.
-- Treat `[NO-RETRY]` as accepted or unknown cloud state. Do not retry or fall back.
-- On `401`/`403`, ask for an Anthropic-protocol Gemini image Key; an Image2-only Key is not sufficient.
-- If a successful response contains only text and no image, report the returned text and preserve the sanitized response summary for diagnosis; do not repeat the paid request automatically.
-- The API endpoint is fixed to `https://88api.ai/v1/messages` and the header version is `2023-06-01`.
+- After success, show every saved image with an absolute-path Markdown image tag.
+- Treat `[NO-RETRY]` as an accepted or unknown cloud state. Do not retry or fall back.
+- On `401`/`403`, ask for a Key that can call the selected model through OpenAI Images.
+- If a successful response contains no saveable image, report only the sanitized text summary; never expose embedded Base64.
+- A response body is capped at 128 MB and a single text-embedded Base64 image at 96 MB to prevent local memory exhaustion.

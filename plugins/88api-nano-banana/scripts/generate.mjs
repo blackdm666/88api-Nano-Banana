@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -14,40 +15,50 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 
 const API_ROOT = "https://88api.ai";
-const MESSAGES_URL = `${API_ROOT}/v1/messages`;
-const ANTHROPIC_VERSION = "2023-06-01";
-const PLUGIN_VERSION = "1.0.0";
+const GENERATIONS_URL = `${API_ROOT}/v1/images/generations`;
+const EDITS_URL = `${API_ROOT}/v1/images/edits`;
+const PLUGIN_VERSION = "1.2.0";
 const CONFIG_PATH = join(homedir(), ".codex", "88api-nano-banana-config.json");
 const DEFAULT_OUTPUT_DIR = join(homedir(), "Pictures", "88api-nano-banana");
 const DEFAULT_MODEL = "gemini-3.1-flash-image";
 const MODELS = new Set(["gemini-3-pro-image", "gemini-3.1-flash-image"]);
 const ASPECTS = new Set(["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]);
 const RESOLUTIONS = new Set(["512", "1K", "2K", "4K"]);
+const SIZE_MATRIX = {
+  "512": {
+    "1:1": "512x512", "3:2": "768x512", "2:3": "512x768", "4:3": "768x576", "3:4": "576x768",
+    "5:4": "760x608", "4:5": "608x760", "16:9": "768x432", "9:16": "432x768", "21:9": "768x320",
+  },
+  "1K": {
+    "1:1": "1024x1024", "3:2": "1536x1024", "2:3": "1024x1536", "4:3": "1536x1152", "3:4": "1152x1536",
+    "5:4": "1520x1216", "4:5": "1216x1520", "16:9": "1536x864", "9:16": "864x1536", "21:9": "1536x640",
+  },
+  "2K": {
+    "1:1": "2048x2048", "3:2": "2048x1360", "2:3": "1360x2048", "4:3": "2048x1536", "3:4": "1536x2048",
+    "5:4": "2040x1632", "4:5": "1632x2040", "16:9": "2048x1152", "9:16": "1152x2048", "21:9": "2048x880",
+  },
+  "4K": {
+    "1:1": "2880x2880", "3:2": "3520x2352", "2:3": "2352x3520", "4:3": "3840x2880", "3:4": "2880x3840",
+    "5:4": "3840x3072", "4:5": "3072x3840", "16:9": "3840x2160", "9:16": "2160x3840", "21:9": "3840x1648",
+  },
+};
 const MAX_IMAGES = 4;
 const MAX_REFERENCE_BYTES = 20 * 1024 * 1024;
+const MAX_RESPONSE_BYTES = 128 * 1024 * 1024;
+const MAX_IMAGE_BASE64_CHARS = 96 * 1024 * 1024;
+const MAX_TEXT_SUMMARY_CHARS = 4000;
 const REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
 
 function defaultConfig() {
-  return {
-    apiKey: "",
-    baseURL: API_ROOT,
-    model: DEFAULT_MODEL,
-    maxTokens: 8192,
-    outputDir: "",
-  };
+  return { apiKey: "", baseURL: API_ROOT, model: DEFAULT_MODEL, outputDir: "" };
 }
 
 function normalizeConfig(value) {
   const source = value && typeof value === "object" ? value : {};
-  const model = MODELS.has(source.model) ? source.model : DEFAULT_MODEL;
-  const maxTokens = Number.isInteger(source.maxTokens) && source.maxTokens >= 1024 && source.maxTokens <= 32768
-    ? source.maxTokens
-    : 8192;
   return {
     apiKey: typeof source.apiKey === "string" ? source.apiKey.trim() : "",
     baseURL: API_ROOT,
-    model,
-    maxTokens,
+    model: MODELS.has(source.model) ? source.model : DEFAULT_MODEL,
     outputDir: typeof source.outputDir === "string" ? source.outputDir.trim() : "",
   };
 }
@@ -97,7 +108,9 @@ function configSummary(config) {
     已配置Key: Boolean(config.apiKey || process.env.NANO_BANANA_API_KEY),
     Key预览: maskKey(config.apiKey || process.env.NANO_BANANA_API_KEY || ""),
     BaseURL: API_ROOT,
-    协议: "Anthropic Messages",
+    协议: "OpenAI Images",
+    生成端点: GENERATIONS_URL,
+    编辑端点: EDITS_URL,
     模型: config.model,
     输出目录: config.outputDir || DEFAULT_OUTPUT_DIR,
   };
@@ -168,57 +181,51 @@ function loadReferenceImages(paths) {
     const data = readFileSync(path);
     totalBytes += data.length;
     if (totalBytes > MAX_REFERENCE_BYTES) throw new Error("参考图总大小超过 20 MB，请减少图片或压缩后重试");
-    return {
-      path,
-      name: basename(path),
-      mimeType: mimeFromPath(path),
-      data: data.toString("base64"),
-      bytes: data.length,
-    };
+    return { path, name: basename(path), mimeType: mimeFromPath(path), data, bytes: data.length };
   });
 }
 
 function enhancedPrompt(prompt, aspect, resolution, hasReferences) {
-  const lines = [prompt.trim()];
-  lines.push(hasReferences
-    ? "Use the supplied reference image(s) as visual input and perform the requested edit."
-    : "Generate the requested image directly.");
-  lines.push(`Target aspect ratio: ${aspect}. Target image resolution: ${resolution}.`);
-  lines.push("Return the final image as an image content block. Do not return only a textual description.");
-  return lines.join("\n\n");
+  return [
+    prompt.trim(),
+    hasReferences
+      ? "Use the supplied reference image(s) as visual input and perform the requested edit."
+      : "Generate the requested image directly.",
+    `Target aspect ratio: ${aspect}. Target image resolution: ${resolution}.`,
+    "Return the final image, not only a textual description.",
+  ].join("\n\n");
 }
 
-function buildRequest({ model, prompt, aspect, resolution, references, maxTokens }) {
-  const content = references.map((reference) => ({
-    type: "image",
-    source: {
-      type: "base64",
-      media_type: reference.mimeType,
-      data: reference.data,
-    },
-  }));
-  content.push({
-    type: "text",
-    text: enhancedPrompt(prompt, aspect, resolution, references.length > 0),
-  });
+function resolveSize(aspect, resolution) {
+  return SIZE_MATRIX[resolution][aspect];
+}
+
+function buildGenerationBody({ model, prompt, aspect, resolution }) {
   return {
     model,
-    max_tokens: maxTokens,
-    messages: [{ role: "user", content }],
+    prompt: enhancedPrompt(prompt, aspect, resolution, false),
+    size: resolveSize(aspect, resolution),
+    n: 1,
   };
 }
 
-function sanitizedRequest(body, references) {
-  const clone = structuredClone(body);
-  const items = clone.messages?.[0]?.content || [];
-  let imageIndex = 0;
-  for (const item of items) {
-    if (item?.type === "image" && item?.source?.data) {
-      const reference = references[imageIndex++];
-      item.source.data = `<省略 ${reference?.bytes || 0} 字节 Base64：${reference?.name || "image"}>`;
-    }
+function editFields({ model, prompt, aspect, resolution }) {
+  return {
+    model,
+    prompt: enhancedPrompt(prompt, aspect, resolution, true),
+    size: resolveSize(aspect, resolution),
+    n: "1",
+  };
+}
+
+function buildEditForm(options, references) {
+  const form = new FormData();
+  const fields = editFields(options);
+  for (const [key, value] of Object.entries(fields)) form.append(key, value);
+  for (const reference of references) {
+    form.append("image[]", new Blob([reference.data], { type: reference.mimeType }), reference.name);
   }
-  return clone;
+  return form;
 }
 
 function normalizeMime(mimeType) {
@@ -236,70 +243,126 @@ function extensionForMime(mimeType) {
   return "png";
 }
 
-function addImage(result, candidate) {
-  if (!candidate) return;
-  if (candidate.data && typeof candidate.data === "string") {
-    result.images.push({ type: "base64", data: candidate.data, mimeType: normalizeMime(candidate.mimeType) });
-  } else if (candidate.url && typeof candidate.url === "string") {
-    result.images.push({ type: "url", url: candidate.url });
-  }
+function isBase64Character(code) {
+  return (code >= 65 && code <= 90)
+    || (code >= 97 && code <= 122)
+    || (code >= 48 && code <= 57)
+    || code === 43 || code === 47 || code === 61 || code === 45 || code === 95;
 }
 
-function parseTextImages(text, result) {
-  if (typeof text !== "string" || !text.trim()) return;
-  const dataUrlPattern = /data:(image\/(?:png|jpeg|jpg|webp|gif));base64,([A-Za-z0-9+/=\r\n]+)/gi;
-  for (const match of text.matchAll(dataUrlPattern)) {
-    addImage(result, { data: match[2].replace(/\s+/g, ""), mimeType: match[1] });
-  }
-  const markdownPattern = /!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/gi;
-  for (const match of text.matchAll(markdownPattern)) addImage(result, { url: match[1] });
-  const safeText = text
-    .replace(/data:image\/(?:png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=\r\n]+/gi, "[图片 Base64 已省略]")
-    .trim();
-  if (safeText) result.text.push(safeText.slice(0, 4000));
+function isBase64Whitespace(code) {
+  return code === 9 || code === 10 || code === 13 || code === 32;
 }
 
-function walkResponse(value, result, seen = new Set()) {
-  if (!value || typeof value !== "object" || seen.has(value)) return;
-  seen.add(value);
-  if (Array.isArray(value)) {
-    for (const item of value) walkResponse(item, result, seen);
+function scanDataUrls(text) {
+  const ranges = [];
+  const pattern = /data:(image\/(?:png|jpe?g|webp|gif))(?:;[a-z0-9._-]+=[^;,\s]+)*;base64,/gi;
+  let match;
+  while ((match = pattern.exec(text)) !== null) {
+    const dataStart = pattern.lastIndex;
+    let end = dataStart;
+    while (end < text.length) {
+      const code = text.charCodeAt(end);
+      if (!isBase64Character(code) && !isBase64Whitespace(code)) break;
+      end += 1;
+    }
+    const length = end - dataStart;
+    if (length > MAX_IMAGE_BASE64_CHARS) {
+      throw new Error(`[NO-RETRY] 响应中的单张文本图片超过 ${MAX_IMAGE_BASE64_CHARS} 字符安全上限`);
+    }
+    if (length > 0) ranges.push({ start: match.index, dataStart, end, mimeType: match[1], data: text.slice(dataStart, end) });
+    pattern.lastIndex = Math.max(end, pattern.lastIndex);
+  }
+  return ranges;
+}
+
+function summarizeText(text, ranges, limit = MAX_TEXT_SUMMARY_CHARS) {
+  const chunks = [];
+  let used = 0;
+  let cursor = 0;
+  const append = (value) => {
+    if (used >= limit) return;
+    const fragment = value.slice(0, limit - used);
+    chunks.push(fragment);
+    used += fragment.length;
+  };
+  for (const range of ranges) {
+    append(text.slice(cursor, range.start));
+    append(`[图片 Base64 已省略：${range.end - range.dataStart} 字符]`);
+    cursor = range.end;
+    if (used >= limit) break;
+  }
+  if (used < limit) append(text.slice(cursor));
+  return chunks.join("").trim();
+}
+
+function collectTextFallback(value, result, seen = new Set()) {
+  if (typeof value === "string") {
+    const ranges = scanDataUrls(value);
+    for (const range of ranges) {
+      result.images.push({ type: "base64", data: range.data, mimeType: normalizeMime(range.mimeType), source: "text-data-url" });
+    }
+    for (const match of value.matchAll(/!\[[^\]\r\n]{0,512}\]\((https?:\/\/[^)\s]+)\)/gi)) {
+      result.images.push({ type: "url", url: match[1], source: "text-url" });
+    }
+    const summary = summarizeText(value, ranges);
+    if (summary) result.text.push(summary);
     return;
   }
-
-  if (value.type === "text" && typeof value.text === "string") parseTextImages(value.text, result);
-  if (value.type === "image") {
-    const source = value.source || value;
-    if (source.type === "base64" || source.data) {
-      addImage(result, { data: source.data, mimeType: source.media_type || source.mime_type || value.media_type });
-    } else if (source.type === "url" || source.url) {
-      addImage(result, { url: source.url });
-    }
+  if (!value || typeof value !== "object" || seen.has(value)) return;
+  seen.add(value);
+  for (const [key, child] of Object.entries(value)) {
+    if (key !== "b64_json" && key !== "base64") collectTextFallback(child, result, seen);
   }
-  if (typeof value.b64_json === "string") addImage(result, { data: value.b64_json, mimeType: value.mime_type });
-  if (typeof value.base64 === "string") addImage(result, { data: value.base64, mimeType: value.mime_type });
-  if (value.inlineData?.data) addImage(result, { data: value.inlineData.data, mimeType: value.inlineData.mimeType });
-  if (value.inline_data?.data) addImage(result, { data: value.inline_data.data, mimeType: value.inline_data.mime_type });
-  if (value.output_image?.data) addImage(result, { data: value.output_image.data, mimeType: value.output_image.mime_type });
-
-  for (const child of Object.values(value)) walkResponse(child, result, seen);
 }
 
-function parseResponse(body) {
-  const result = { images: [], text: [] };
-  walkResponse(body, result);
-  const unique = [];
-  const fingerprints = new Set();
-  for (const image of result.images) {
-    const fingerprint = image.type === "url" ? `url:${image.url}` : `b64:${image.data.slice(0, 80)}:${image.data.length}`;
-    if (!fingerprints.has(fingerprint)) {
-      fingerprints.add(fingerprint);
-      unique.push(image);
-    }
+function addStructuredImage(images, candidate) {
+  if (!candidate || typeof candidate !== "object") return;
+  const base64 = candidate.b64_json || candidate.base64 || candidate.image?.b64_json || candidate.image?.base64;
+  const url = typeof candidate.url === "string" ? candidate.url : candidate.image?.url;
+  const mimeType = candidate.mime_type || candidate.mimeType || candidate.image?.mime_type || candidate.image?.mimeType;
+  if (typeof base64 === "string" && base64.length > 0) {
+    if (base64.length > MAX_IMAGE_BASE64_CHARS) throw new Error(`[NO-RETRY] 响应中的单张 Base64 图片超过 ${MAX_IMAGE_BASE64_CHARS} 字符安全上限`);
+    images.push({ type: "base64", data: base64, mimeType: normalizeMime(mimeType), source: "images-b64_json" });
+  } else if (typeof url === "string" && /^https?:\/\//i.test(url)) {
+    images.push({ type: "url", url, source: "images-url" });
   }
-  result.images = unique;
-  result.text = [...new Set(result.text)];
-  return result;
+}
+
+function imageFingerprint(image) {
+  if (image.type === "url") return `url:${image.url}`;
+  return `b64:${image.mimeType}:${image.data.length}:${image.data.slice(0, 96)}:${image.data.slice(-96)}`;
+}
+
+function uniqueImages(images) {
+  const seen = new Set();
+  return images.filter((image) => {
+    const fingerprint = imageFingerprint(image);
+    if (seen.has(fingerprint)) return false;
+    seen.add(fingerprint);
+    return true;
+  });
+}
+
+function parseImagesResponse(body) {
+  const structured = [];
+  const entries = Array.isArray(body?.data) ? body.data : [];
+  for (const entry of entries) addStructuredImage(structured, entry);
+  const structuredUnique = uniqueImages(structured);
+  if (structuredUnique.length > 0) {
+    return { images: structuredUnique, text: [], candidateCount: structuredUnique.length, discardedCount: 0 };
+  }
+
+  const fallback = { images: [], text: [] };
+  collectTextFallback(body, fallback);
+  const candidates = uniqueImages(fallback.images);
+  const selected = candidates.length > 0 ? [candidates.at(-1)] : [];
+  return {
+    images: selected,
+    text: [...new Set(fallback.text)],
+    candidateCount: candidates.length,
+    discardedCount: Math.max(0, candidates.length - selected.length),
+  };
 }
 
 async function fetchWithTimeout(url, init, timeoutMs = REQUEST_TIMEOUT_MS) {
@@ -312,28 +375,112 @@ async function fetchWithTimeout(url, init, timeoutMs = REQUEST_TIMEOUT_MS) {
   }
 }
 
+async function readResponseBuffer(response, maxBytes = MAX_RESPONSE_BYTES) {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await response.body?.cancel().catch(() => {});
+    throw new Error(`[NO-RETRY] 响应体 ${declared} 字节，超过 ${maxBytes} 字节安全上限`);
+  }
+  if (!response.body?.getReader) {
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length > maxBytes) throw new Error(`[NO-RETRY] 响应体超过 ${maxBytes} 字节安全上限`);
+    return buffer;
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw new Error(`[NO-RETRY] 响应体超过 ${maxBytes} 字节安全上限`);
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks, total);
+}
+
+function safeErrorMessage(body) {
+  const direct = body?.error?.message || body?.message;
+  const value = typeof direct === "string" ? direct : typeof body === "string" ? body : JSON.stringify(body || {});
+  return summarizeText(value, scanDataUrls(value), 2000);
+}
+
+function parseApiError(status, body) {
+  const message = safeErrorMessage(body);
+  if (status === 401 || status === 403) {
+    return `OpenAI Images 鉴权失败（HTTP ${status}）：请确认 Key 能调用所选 Gemini 图片模型。${message ? ` ${message}` : ""}`;
+  }
+  return `88API OpenAI Images 请求失败（HTTP ${status}）：${message || "未知错误"}`;
+}
+
+async function callImagesApi({ apiKey, endpoint, body, headers = {} }) {
+  let response;
+  try {
+    response = await fetchWithTimeout(endpoint, {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}`, ...headers },
+      body,
+    });
+  } catch (error) {
+    if (String(error?.message || "").startsWith("[NO-RETRY]")) throw error;
+    throw new Error(`[NO-RETRY] 请求状态未知：${error?.name === "AbortError" ? "请求超时" : error?.message || String(error)}`);
+  }
+
+  let raw;
+  try {
+    raw = (await readResponseBuffer(response)).toString("utf8");
+  } catch (error) {
+    if (String(error?.message || "").startsWith("[NO-RETRY]")) throw error;
+    throw new Error(`[NO-RETRY] 请求已返回响应头，但读取响应体失败：${error?.message || String(error)}`);
+  }
+  let parsed;
+  try {
+    parsed = raw ? JSON.parse(raw) : {};
+  } catch {
+    parsed = raw;
+  }
+  if (!response.ok) throw new Error(parseApiError(response.status, parsed));
+  return parsed;
+}
+
+async function requestImage({ apiKey, options, references }) {
+  if (references.length === 0) {
+    const body = buildGenerationBody(options);
+    return callImagesApi({
+      apiKey,
+      endpoint: GENERATIONS_URL,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+  return callImagesApi({ apiKey, endpoint: EDITS_URL, body: buildEditForm(options, references) });
+}
+
 async function downloadImage(url, apiKey) {
   const headers = {};
   try {
-    if (new URL(url).origin === new URL(API_ROOT).origin) {
-      headers["x-api-key"] = apiKey;
-      headers["anthropic-version"] = ANTHROPIC_VERSION;
-    }
+    if (new URL(url).origin === new URL(API_ROOT).origin) headers.authorization = `Bearer ${apiKey}`;
   } catch {
-    throw new Error(`返回了无效图片地址：${url}`);
+    throw new Error(`[NO-RETRY] 返回了无效图片地址：${url}`);
   }
-  const response = await fetchWithTimeout(url, { headers }, 2 * 60 * 1000);
-  if (!response.ok) throw new Error(`图片下载失败：HTTP ${response.status}`);
-  return {
-    buffer: Buffer.from(await response.arrayBuffer()),
-    mimeType: normalizeMime(response.headers.get("content-type")),
-  };
+  let response;
+  try {
+    response = await fetchWithTimeout(url, { headers }, 2 * 60 * 1000);
+  } catch (error) {
+    throw new Error(`[NO-RETRY] 图片下载状态未知：${error?.message || String(error)}`);
+  }
+  if (!response.ok) throw new Error(`[NO-RETRY] 请求已成功，但图片下载失败：HTTP ${response.status}`);
+  const buffer = await readResponseBuffer(response);
+  return { buffer, mimeType: normalizeMime(response.headers.get("content-type")) };
 }
 
 function timestamp() {
   const d = new Date();
-  const pad = (value) => String(value).padStart(2, "0");
-  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  const pad = (value, width = 2) => String(value).padStart(width, "0");
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}${pad(d.getMilliseconds(), 3)}`;
 }
 
 function detectMime(buffer, fallback = "image/png") {
@@ -342,6 +489,12 @@ function detectMime(buffer, fallback = "image/png") {
   if (buffer.length >= 12 && buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
   if (buffer.length >= 6 && buffer.subarray(0, 3).toString("ascii") === "GIF") return "image/gif";
   return normalizeMime(fallback);
+}
+
+function decodeBase64(data) {
+  const normalized = data.replace(/\s+/g, "").replace(/-/g, "+").replace(/_/g, "/");
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) throw new Error("[NO-RETRY] 接口返回了无效的 Base64 图片数据");
+  return Buffer.from(normalized, "base64");
 }
 
 function saveBuffer(buffer, mimeType, outputDir, index, requestIndex) {
@@ -355,93 +508,65 @@ function saveBuffer(buffer, mimeType, outputDir, index, requestIndex) {
 
 async function saveParsedImages(parsed, outputDir, apiKey, requestIndex) {
   const saved = [];
-  for (let index = 0; index < parsed.images.length; index += 1) {
-    const image = parsed.images[index];
-    if (image.type === "url") {
-      const downloaded = await downloadImage(image.url, apiKey);
-      saved.push(saveBuffer(downloaded.buffer, downloaded.mimeType, outputDir, index + 1, requestIndex));
-    } else {
-      const buffer = Buffer.from(image.data.replace(/\s+/g, ""), "base64");
-      if (!buffer.length) throw new Error("接口返回了空的 Base64 图片");
-      saved.push(saveBuffer(buffer, image.mimeType, outputDir, index + 1, requestIndex));
-    }
+  const hashes = new Set();
+  for (const image of parsed.images) {
+    const downloaded = image.type === "url" ? await downloadImage(image.url, apiKey) : null;
+    const buffer = downloaded?.buffer || decodeBase64(image.data);
+    const mimeType = downloaded?.mimeType || image.mimeType;
+    if (!buffer.length) throw new Error("[NO-RETRY] 接口返回了空的 Base64 图片");
+    const hash = createHash("sha256").update(buffer).digest("hex");
+    if (hashes.has(hash)) continue;
+    hashes.add(hash);
+    saved.push(saveBuffer(buffer, mimeType, outputDir, saved.length + 1, requestIndex));
   }
   return saved;
 }
 
-function parseApiError(status, body) {
-  const message = body?.error?.message || body?.message || (typeof body === "string" ? body : JSON.stringify(body));
-  if (status === 401 || status === 403) {
-    return `鉴权失败（HTTP ${status}）：请使用能够调用 Gemini 图片模型的 Anthropic 协议分组 Key。${message ? ` ${message}` : ""}`;
-  }
-  return `88API 请求失败（HTTP ${status}）：${message || "未知错误"}`;
-}
-
-async function callMessages({ apiKey, body }) {
-  let response;
-  try {
-    response = await fetchWithTimeout(MESSAGES_URL, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": ANTHROPIC_VERSION,
-      },
-      body: JSON.stringify(body),
-    });
-  } catch (error) {
-    throw new Error(`[NO-RETRY] 请求状态未知：${error?.name === "AbortError" ? "请求超时" : error?.message || String(error)}`);
-  }
-
-  const raw = await response.text();
-  let parsedBody;
-  try {
-    parsedBody = raw ? JSON.parse(raw) : {};
-  } catch {
-    parsedBody = raw;
-  }
-  if (!response.ok) throw new Error(parseApiError(response.status, parsedBody));
-  return parsedBody;
-}
-
 function printHelp() {
-  console.log(`88api-Nano-Banana ${PLUGIN_VERSION}\n\n配置：\n  --get-config\n  --config-path\n  --set-key <KEY>\n  --set-model <MODEL>\n  --list-models\n\n生图：\n  --prompt <TEXT> [--model MODEL] [--image PATH ...] [--aspect RATIO] [--resolution 1K] [--count 1..${MAX_IMAGES}] [--output-dir DIR]\n\n验证：\n  --dry-run\n  --self-test\n\n协议：Anthropic Messages\n端点：${MESSAGES_URL}`);
+  console.log(`88api-Nano-Banana ${PLUGIN_VERSION}\n\n协议：OpenAI Images（唯一协议）\n生成：POST ${GENERATIONS_URL}\n编辑：POST ${EDITS_URL}\n\n配置：\n  --get-config\n  --config-path\n  --set-key <KEY>\n  --set-model <MODEL>\n  --list-models\n\n生图或编辑：\n  --prompt <TEXT> [--model MODEL] [--image PATH ...] [--aspect RATIO] [--resolution 1K] [--count 1..${MAX_IMAGES}] [--output-dir DIR]\n\n验证：\n  --dry-run\n  --self-test`);
 }
 
 function runSelfTest() {
   const fakePng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z5ZkAAAAASUVORK5CYII=";
-  const references = [{ name: "test.png", mimeType: "image/png", data: fakePng, bytes: 68 }];
-  const body = buildRequest({
-    model: DEFAULT_MODEL,
-    prompt: "测试",
-    aspect: "1:1",
-    resolution: "1K",
-    references,
-    maxTokens: 8192,
-  });
-  const anthropic = parseResponse({ content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: fakePng } }] });
-  const gateway = parseResponse({ content: [{ type: "text", text: `![result](data:image/png;base64,${fakePng})` }] });
-  const google = parseResponse({ candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: fakePng } }] } }] });
+  const fakeGif = "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+  const generation = buildGenerationBody({ model: DEFAULT_MODEL, prompt: "测试", aspect: "16:9", resolution: "1K" });
+  const structured = parseImagesResponse({ data: [{ b64_json: fakePng }] });
+  const fallback = parseImagesResponse({ output: `![draft](data:image/png;base64,${fakePng})\n![final](data:image/gif;base64,${fakeGif})` });
+  const longBase64 = "A".repeat(1_250_000);
+  const longText = parseImagesResponse({ output: `data:image/jpeg;base64,${longBase64}` });
   const tempConfig = join(tmpdir(), `88api-nano-banana-self-test-${process.pid}-${Date.now()}.json`);
   try {
-    saveConfig({ ...defaultConfig(), model: "gemini-3-pro-image" }, tempConfig);
-    const roundTrip = loadConfig(tempConfig);
-    const ok = body.messages[0].content[0].type === "image"
-      && anthropic.images.length === 1
-      && gateway.images.length === 1
-      && google.images.length === 1
-      && roundTrip.model === "gemini-3-pro-image"
-      && MESSAGES_URL === "https://88api.ai/v1/messages";
+    atomicWriteJson(tempConfig, {
+      apiKey: "", baseURL: API_ROOT, protocol: "legacy", model: "gemini-3-pro-image", maxTokens: 8192, outputDir: "",
+    });
+    const legacyConfig = loadConfig(tempConfig);
+    saveConfig(legacyConfig, tempConfig);
+    const persisted = JSON.parse(readFileSync(tempConfig, "utf8"));
+    const ok = generation.size === "1536x864"
+      && generation.n === 1
+      && structured.images.length === 1
+      && structured.images[0].source === "images-b64_json"
+      && fallback.images.length === 1
+      && fallback.images[0].mimeType === "image/gif"
+      && fallback.discardedCount === 1
+      && longText.images.length === 1
+      && longText.images[0].data.length === longBase64.length
+      && longText.text.every((text) => text.length <= MAX_TEXT_SUMMARY_CHARS)
+      && !Object.hasOwn(persisted, "protocol")
+      && !Object.hasOwn(persisted, "maxTokens")
+      && persisted.model === "gemini-3-pro-image"
+      && GENERATIONS_URL === "https://88api.ai/v1/images/generations"
+      && EDITS_URL === "https://88api.ai/v1/images/edits";
     if (!ok) throw new Error("自测断言失败");
   } finally {
     rmSync(tempConfig, { force: true });
   }
   console.log(JSON.stringify({
-    语法与配置: "通过",
-    Anthropic请求体: "通过",
-    Anthropic图片块解析: "通过",
-    网关DataURL解析: "通过",
-    GeminiInlineData解析: "通过",
+    OpenAIImages生成请求: "通过",
+    OpenAIImages编辑契约: "通过",
+    标准b64_json解析: "通过",
+    超长文本图片解析: "通过（1,250,000 Base64 字符）",
+    旧配置迁移: "通过（已删除旧协议字段）",
     付费API调用: "未执行",
   }, null, 2));
 }
@@ -480,37 +605,57 @@ async function main() {
   const count = flags.count ?? 1;
   if (!Number.isInteger(count) || count < 1 || count > MAX_IMAGES) throw new Error(`--count 必须是 1..${MAX_IMAGES} 的整数`);
   const references = loadReferenceImages(flags.images);
-  const body = buildRequest({ model, prompt: flags.prompt, aspect, resolution, references, maxTokens: config.maxTokens });
+  const options = { model, prompt: flags.prompt, aspect, resolution };
+  const endpoint = references.length > 0 ? EDITS_URL : GENERATIONS_URL;
 
   if (flags.dryRun) {
+    const request = references.length > 0
+      ? {
+        fields: editFields(options),
+        images: references.map(({ name, mimeType, bytes }) => ({ field: "image[]", name, mimeType, bytes })),
+      }
+      : { body: buildGenerationBody(options) };
     console.log(JSON.stringify({
       method: "POST",
-      url: MESSAGES_URL,
-      headers: { "content-type": "application/json", "x-api-key": "<已隐藏>", "anthropic-version": ANTHROPIC_VERSION },
-      body: sanitizedRequest(body, references),
+      protocol: "OpenAI Images",
+      url: endpoint,
+      headers: { authorization: "Bearer <已隐藏>", ...(references.length ? {} : { "content-type": "application/json" }) },
+      ...request,
       paidRequests: count,
     }, null, 2));
     return;
   }
 
   const apiKey = config.apiKey || process.env.NANO_BANANA_API_KEY || "";
-  if (!apiKey) {
-    throw new Error(`尚未配置 Key。请先运行 --set-key <KEY>。配置文件：${CONFIG_PATH}`);
-  }
+  if (!apiKey) throw new Error(`尚未配置 Key。请先运行 --set-key <KEY>。配置文件：${CONFIG_PATH}`);
   const outputDir = flags.outputDir || config.outputDir || DEFAULT_OUTPUT_DIR;
   const allSaved = [];
+  let discardedImages = 0;
   for (let requestIndex = 1; requestIndex <= count; requestIndex += 1) {
-    const responseBody = await callMessages({ apiKey, body });
-    const parsed = parseResponse(responseBody);
+    const responseBody = await requestImage({ apiKey, options, references });
+    const parsed = parseImagesResponse(responseBody);
+    discardedImages += parsed.discardedCount;
     if (!parsed.images.length) {
-      const text = parsed.text.join("\n").slice(0, 2000);
-      throw new Error(`[NO-RETRY] 请求已成功完成，但响应中没有可保存的图片。${text ? ` 返回文本：${text}` : ""}`);
+      const responseText = parsed.text.join("\n").slice(0, 2000);
+      throw new Error(`[NO-RETRY] 请求已成功完成，但响应中没有可保存的图片。${responseText ? ` 返回文本：${responseText}` : ""}`);
     }
     const saved = await saveParsedImages(parsed, outputDir, apiKey, requestIndex);
+    if (!saved.length) throw new Error("[NO-RETRY] 请求已成功完成，但所有返回图片均为空或重复");
     allSaved.push(...saved);
     for (const path of saved) console.log(`图片已保存：${path}`);
   }
-  console.log(JSON.stringify({ model, protocol: "Anthropic Messages", count: allSaved.length, files: allSaved }, null, 2));
+  console.log(JSON.stringify({
+    model,
+    protocol: "OpenAI Images",
+    endpoint,
+    requestedAspect: aspect,
+    requestedResolution: resolution,
+    requestedSize: resolveSize(aspect, resolution),
+    requests: count,
+    count: allSaved.length,
+    discardedImages,
+    files: allSaved,
+  }, null, 2));
 }
 
 main().catch((error) => {
