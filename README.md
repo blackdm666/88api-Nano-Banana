@@ -1,6 +1,6 @@
 # 88api-Nano-Banana
 
-来自 [88api.ai](https://88api.ai/) Token 聚合站的 Codex 专用 Gemini 生图插件，仅使用 **OpenAI Images** 协议。
+来自 [88api.ai](https://88api.ai/) Token 聚合站的 Codex 专用 Gemini 生图插件。它通过 **OpenAI Images** 协议生成和编辑图片，并将结果直接保存到本地。
 
 可调用：
 
@@ -9,14 +9,26 @@
 
 插件独立于 `88API-image-gen`，不共享 Key 或配置文件。
 
-## API 契约
+## 选择适合你的方式
+
+| 方式 | 适合场景 | 入口 |
+| --- | --- | --- |
+| Codex 插件（本项目） | 在 Codex 中用自然语言生成或编辑图片，适合参考图、重复任务、自动化和本地落盘 | 按下方步骤安装 |
+| 简单生图工具 | 无需安装，在浏览器中填写提示词、调整参数、上传参考图并复用历史任务 | [打开简单生图工具](https://img.88api.ai/) |
+| 专业画布工具 | 适合复杂创作流程、图像与视频项目、提示词库、资产管理和 Agent 辅助任务 | [打开专业画布工具](https://img-pro.88api.ai/) |
+
+只想快速出一张图时使用简单生图工具；需要可视化管理素材和多步骤创作时使用专业画布；希望让 Codex 理解需求并自动执行、保存文件时使用本插件。
+
+## API 协议
+
+从 `v1.2.0` 开始，插件仅使用 OpenAI Images 协议：
 
 | 场景 | 端点 | 请求格式 |
 | --- | --- | --- |
 | 文生图 | `https://88api.ai/v1/images/generations` | JSON |
 | 参考图编辑 | `https://88api.ai/v1/images/edits` | multipart，参考图字段为 `image[]` |
 
-两个端点都使用 `Authorization: Bearer <KEY>`。插件没有其他协议、协议选择器或故障自动路由。
+两个端点都使用 `Authorization: Bearer <KEY>`。旧版的 Anthropic Messages、Gemini 原生协议和 OpenAI Chat 兼容逻辑已移除；插件没有协议选择器，也不会在协议之间自动路由。
 
 ## 环境
 
@@ -32,11 +44,13 @@
 
 ### 2. 创建 API Key
 
-进入“API 密钥”，点击“创建 API 密钥”。Nano Banana 只需要一个 Key，数量填写 `1`。
+进入“API 密钥”，点击“创建 API 密钥”。名称可以自定义（例如“生图”），分组选择 `auto`（自动分组）；如需在当前分组渠道失败时继续尝试下一分组，可开启“跨分组重试”。
 
-![创建 API Key](docs/assets/88api-create-anthropic-gemini-key.png)
+![创建 API Key](docs/assets/88api-create-image-key.png)
 
 ### 3. 复制并配置 Key
+
+复制创建好的 Key，然后直接交给 Codex 配置到插件中，或者执行下方命令：
 
 ![复制 API Key](docs/assets/88api-copy-key.png)
 
@@ -45,7 +59,7 @@ node "<PLUGIN_ROOT>\scripts\generate.mjs" --set-key "<YOUR_88API_GEMINI_IMAGE_KE
 node "<PLUGIN_ROOT>\scripts\generate.mjs" --get-config
 ```
 
-配置保存在 `~/.codex/88api-nano-banana-config.json`。旧版本留下的协议字段会在下次保存配置时清除。不要把真实 Key 写入仓库、文档、日志或聊天内容。
+配置保存在 `~/.codex/88api-nano-banana-config.json`。旧版本留下的协议字段会在下次保存配置时清除。不要把真实 Key 写入仓库、文档、日志或公开聊天内容。
 
 ## 安装
 
