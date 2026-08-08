@@ -1,6 +1,6 @@
 ---
 name: 88api-nano-banana
-description: Generate or edit raster images through 88api.ai with Gemini image models over the OpenAI Images API. Use for Nano Banana generation, reference-image editing, or very long Base64/Data-URI image responses.
+description: Generate or edit raster images through 88api.ai with Gemini image models over the OpenAI Chat Completions API. Use for Nano Banana generation, reference-image editing, or very long Base64/Data-URI image responses.
 ---
 
 # 88API Nano Banana
@@ -11,7 +11,7 @@ Use the bundled `scripts/generate.mjs`. Resolve the plugin root from this instal
 
 1. Confirm Node.js 18 or newer with `node --version`.
 2. Run `node "<PLUGIN_ROOT>/scripts/generate.mjs" --get-config` before generation.
-3. If `已配置Key` is `false`, stop before generation. Tell the user to sign in at `https://88api.ai/`, open **API 密钥**, and create one Key that can call the selected Gemini image model through OpenAI Images. Point to `https://github.com/blackdm666/88api-Nano-Banana#创建并配置-88api-key` for the illustrated tutorial.
+3. If `已配置Key` is `false`, stop before generation. Tell the user to sign in at `https://88api.ai/`, open **API 密钥**, and create one Key that can call the selected Gemini image model through OpenAI Chat Completions. Point to `https://github.com/blackdm666/88api-Nano-Banana#创建并配置-88api-key` for the illustrated tutorial.
 4. Save the Key only after the user supplies or directly enters it:
 
 ```bash
@@ -22,12 +22,14 @@ The plugin uses `~/.codex/88api-nano-banana-config.json`. Never print, log, comm
 
 ## API contract
 
-OpenAI Images is the plugin's only protocol. There is no protocol selector or automatic fallback.
+OpenAI Chat Completions is the plugin's only protocol. There is no protocol selector or automatic fallback.
 
-- Generation: `POST https://88api.ai/v1/images/generations` with JSON.
-- Reference-image editing: `POST https://88api.ai/v1/images/edits` with multipart `image[]` fields in input order.
+- Endpoint: `POST https://88api.ai/v1/chat/completions` with JSON for generation and reference-image editing.
 - Authentication: `Authorization: Bearer <KEY>`.
-- Response: prefer standard `data[].b64_json`, then `data[].url`; bounded long-text Data URI parsing is a compatibility fallback.
+- Request: `messages`, `modalities: ["text", "image"]`, and `extra_body.google.image_config`.
+- Image settings: send the selected ratio as `aspect_ratio` and `1K|2K|4K` as `image_size`.
+- Reference images: include ordered `image_url` content parts as local Data URIs in the user message.
+- Response: parse images from Chat Completions message content, image fields, Markdown, HTTP URLs, or Data URIs with bounded memory.
 
 Never silently switch endpoints, models, or resend an accepted/unknown paid request.
 
@@ -49,7 +51,7 @@ Optional flags:
 
 - `--model gemini-3-pro-image|gemini-3.1-flash-image`
 - `--aspect 1:1|2:3|3:2|3:4|4:3|4:5|5:4|9:16|16:9|21:9`
-- `--resolution 512|1K|2K|4K` (`512` is Flash-only)
+- `--resolution 1K|2K|4K`
 - `--count 1..4` (each count is a separate paid request)
 - `--output-dir "<ABSOLUTE_DIRECTORY>"`
 
@@ -59,7 +61,7 @@ Aspect and resolution are requested targets. Verify the saved file when exact di
 
 ## Edit with reference images
 
-Pass local PNG, JPEG, WebP, or GIF paths in input order. The script sends them as multipart `image[]` values to the Images edits endpoint.
+Pass local PNG, JPEG, WebP, or GIF paths in input order. The script sends them as ordered `image_url` Data URI content parts in the Chat Completions user message.
 
 ```bash
 node "<PLUGIN_ROOT>/scripts/generate.mjs" --image "<REFERENCE_1>" --image "<REFERENCE_2>" --prompt "<EDIT_INSTRUCTION>" --aspect 9:16 --resolution 1K
@@ -82,12 +84,12 @@ Dry runs hide the Key and never include reference-image bytes or Base64.
 
 ## Long image responses
 
-The normal response is structured OpenAI Images data. If 88API instead wraps an image in a very long Markdown/Data URI string, the script scans it with bounded memory, removes Base64 from summaries, accepts standard and URL-safe Base64, and selects the last text-embedded image as the final result.
+The normal response is a Chat Completions message containing image data or links. If 88API wraps an image in a very long Markdown/Data URI string, the script scans it with bounded memory, removes Base64 from summaries, accepts standard and URL-safe Base64, and selects the last text-embedded image as the final result.
 
 ## Results and errors
 
 - After success, show every saved image with an absolute-path Markdown image tag.
 - Treat `[NO-RETRY]` as an accepted or unknown cloud state. Do not retry or fall back.
-- On `401`/`403`, ask for a Key that can call the selected model through OpenAI Images.
+- On `401`/`403`, ask for a Key that can call the selected model through OpenAI Chat Completions.
 - If a successful response contains no saveable image, report only the sanitized text summary; never expose embedded Base64.
 - A response body is capped at 128 MB and a single text-embedded Base64 image at 96 MB to prevent local memory exhaustion.
