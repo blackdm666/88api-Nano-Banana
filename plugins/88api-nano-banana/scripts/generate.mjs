@@ -15,33 +15,14 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 
 const API_ROOT = "https://88api.ai";
-const GENERATIONS_URL = `${API_ROOT}/v1/images/generations`;
-const EDITS_URL = `${API_ROOT}/v1/images/edits`;
-const PLUGIN_VERSION = "1.2.0";
+const CHAT_COMPLETIONS_URL = `${API_ROOT}/v1/chat/completions`;
+const PLUGIN_VERSION = "1.3.0";
 const CONFIG_PATH = join(homedir(), ".codex", "88api-nano-banana-config.json");
 const DEFAULT_OUTPUT_DIR = join(homedir(), "Pictures", "88api-nano-banana");
 const DEFAULT_MODEL = "gemini-3.1-flash-image";
 const MODELS = new Set(["gemini-3-pro-image", "gemini-3.1-flash-image"]);
 const ASPECTS = new Set(["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]);
-const RESOLUTIONS = new Set(["512", "1K", "2K", "4K"]);
-const SIZE_MATRIX = {
-  "512": {
-    "1:1": "512x512", "3:2": "768x512", "2:3": "512x768", "4:3": "768x576", "3:4": "576x768",
-    "5:4": "760x608", "4:5": "608x760", "16:9": "768x432", "9:16": "432x768", "21:9": "768x320",
-  },
-  "1K": {
-    "1:1": "1024x1024", "3:2": "1536x1024", "2:3": "1024x1536", "4:3": "1536x1152", "3:4": "1152x1536",
-    "5:4": "1520x1216", "4:5": "1216x1520", "16:9": "1536x864", "9:16": "864x1536", "21:9": "1536x640",
-  },
-  "2K": {
-    "1:1": "2048x2048", "3:2": "2048x1360", "2:3": "1360x2048", "4:3": "2048x1536", "3:4": "1536x2048",
-    "5:4": "2040x1632", "4:5": "1632x2040", "16:9": "2048x1152", "9:16": "1152x2048", "21:9": "2048x880",
-  },
-  "4K": {
-    "1:1": "2880x2880", "3:2": "3520x2352", "2:3": "2352x3520", "4:3": "3840x2880", "3:4": "2880x3840",
-    "5:4": "3840x3072", "4:5": "3072x3840", "16:9": "3840x2160", "9:16": "2160x3840", "21:9": "3840x1648",
-  },
-};
+const RESOLUTIONS = new Set(["1K", "2K", "4K"]);
 const MAX_IMAGES = 4;
 const MAX_REFERENCE_BYTES = 20 * 1024 * 1024;
 const MAX_RESPONSE_BYTES = 128 * 1024 * 1024;
@@ -108,9 +89,8 @@ function configSummary(config) {
     已配置Key: Boolean(config.apiKey || process.env.NANO_BANANA_API_KEY),
     Key预览: maskKey(config.apiKey || process.env.NANO_BANANA_API_KEY || ""),
     BaseURL: API_ROOT,
-    协议: "OpenAI Images",
-    生成端点: GENERATIONS_URL,
-    编辑端点: EDITS_URL,
+    协议: "OpenAI Chat Completions",
+    请求端点: CHAT_COMPLETIONS_URL,
     模型: config.model,
     输出目录: config.outputDir || DEFAULT_OUTPUT_DIR,
   };
@@ -158,9 +138,6 @@ function validateAspect(aspect) {
 
 function validateResolution(resolution, model) {
   if (!RESOLUTIONS.has(resolution)) throw new Error(`不支持的分辨率：${resolution}`);
-  if (resolution === "512" && model !== "gemini-3.1-flash-image") {
-    throw new Error("512 分辨率仅允许 gemini-3.1-flash-image");
-  }
   return resolution;
 }
 
@@ -185,47 +162,37 @@ function loadReferenceImages(paths) {
   });
 }
 
-function enhancedPrompt(prompt, aspect, resolution, hasReferences) {
-  return [
-    prompt.trim(),
-    hasReferences
-      ? "Use the supplied reference image(s) as visual input and perform the requested edit."
-      : "Generate the requested image directly.",
-    `Target aspect ratio: ${aspect}. Target image resolution: ${resolution}.`,
-    "Return the final image, not only a textual description.",
-  ].join("\n\n");
-}
-
-function resolveSize(aspect, resolution) {
-  return SIZE_MATRIX[resolution][aspect];
-}
-
-function buildGenerationBody({ model, prompt, aspect, resolution }) {
+function referenceImagePart(reference, redactImageData = false) {
+  const encoded = redactImageData
+    ? `<已省略 ${reference.bytes} 字节参考图>`
+    : reference.data.toString("base64");
   return {
-    model,
-    prompt: enhancedPrompt(prompt, aspect, resolution, false),
-    size: resolveSize(aspect, resolution),
-    n: 1,
+    type: "image_url",
+    image_url: { url: `data:${reference.mimeType};base64,${encoded}` },
   };
 }
 
-function editFields({ model, prompt, aspect, resolution }) {
+function buildChatCompletionsBody({ model, prompt, aspect, resolution }, references, { redactImageData = false } = {}) {
+  const text = prompt.trim();
+  const content = references.length === 0
+    ? text
+    : [
+      { type: "text", text },
+      ...references.map((reference) => referenceImagePart(reference, redactImageData)),
+    ];
   return {
     model,
-    prompt: enhancedPrompt(prompt, aspect, resolution, true),
-    size: resolveSize(aspect, resolution),
-    n: "1",
+    messages: [{ role: "user", content }],
+    modalities: ["text", "image"],
+    extra_body: {
+      google: {
+        image_config: {
+          aspect_ratio: aspect,
+          image_size: resolution,
+        },
+      },
+    },
   };
-}
-
-function buildEditForm(options, references) {
-  const form = new FormData();
-  const fields = editFields(options);
-  for (const [key, value] of Object.entries(fields)) form.append(key, value);
-  for (const reference of references) {
-    form.append("image[]", new Blob([reference.data], { type: reference.mimeType }), reference.name);
-  }
-  return form;
 }
 
 function normalizeMime(mimeType) {
@@ -296,7 +263,7 @@ function summarizeText(text, ranges, limit = MAX_TEXT_SUMMARY_CHARS) {
   return chunks.join("").trim();
 }
 
-function collectTextFallback(value, result, seen = new Set()) {
+function collectTextFallback(value, result, seen = new Set(), context = { image: false, key: "" }) {
   if (typeof value === "string") {
     const ranges = scanDataUrls(value);
     for (const range of ranges) {
@@ -305,14 +272,34 @@ function collectTextFallback(value, result, seen = new Set()) {
     for (const match of value.matchAll(/!\[[^\]\r\n]{0,512}\]\((https?:\/\/[^)\s]+)\)/gi)) {
       result.images.push({ type: "url", url: match[1], source: "text-url" });
     }
+    if (context.image && (context.key === "url" || context.key === "content") && /^https?:\/\/\S+$/i.test(value)) {
+      result.images.push({ type: "url", url: value, source: "chat-image-url" });
+    }
     const summary = summarizeText(value, ranges);
     if (summary) result.text.push(summary);
     return;
   }
   if (!value || typeof value !== "object" || seen.has(value)) return;
   seen.add(value);
+  const mimeHint = String(value.mime_type || value.mimeType || "");
+  const imageContext = context.image
+    || /image/i.test(String(value.type || ""))
+    || /^image\//i.test(mimeHint)
+    || Object.keys(value).some((key) => /image/i.test(key));
   for (const [key, child] of Object.entries(value)) {
-    if (key !== "b64_json" && key !== "base64") collectTextFallback(child, result, seen);
+    if ((key === "b64_json" || key === "base64" || key === "data") && imageContext && typeof child === "string") {
+      if (child.length > MAX_IMAGE_BASE64_CHARS) {
+        throw new Error(`[NO-RETRY] 响应中的单张 Base64 图片超过 ${MAX_IMAGE_BASE64_CHARS} 字符安全上限`);
+      }
+      result.images.push({
+        type: "base64",
+        data: child,
+        mimeType: normalizeMime(mimeHint),
+        source: "chat-image-base64",
+      });
+    } else if (key !== "b64_json" && key !== "base64") {
+      collectTextFallback(child, result, seen, { image: imageContext || /image/i.test(key), key: key.toLowerCase() });
+    }
   }
 }
 
@@ -344,7 +331,7 @@ function uniqueImages(images) {
   });
 }
 
-function parseImagesResponse(body) {
+function parseChatCompletionsResponse(body) {
   const structured = [];
   const entries = Array.isArray(body?.data) ? body.data : [];
   for (const entry of entries) addStructuredImage(structured, entry);
@@ -354,7 +341,15 @@ function parseImagesResponse(body) {
   }
 
   const fallback = { images: [], text: [] };
-  collectTextFallback(body, fallback);
+  const topLevelChoices = Array.isArray(body?.choices) ? body.choices : [];
+  const listedChoices = Array.isArray(body?.data)
+    ? body.data.flatMap((entry) => (Array.isArray(entry?.choices) ? entry.choices : []))
+    : [];
+  const seen = new Set();
+  for (const choice of [...topLevelChoices, ...listedChoices]) {
+    if (choice?.message) collectTextFallback(choice.message, fallback, seen, { image: true, key: "message" });
+  }
+  collectTextFallback(body, fallback, seen);
   const candidates = uniqueImages(fallback.images);
   const selected = candidates.length > 0 ? [candidates.at(-1)] : [];
   return {
@@ -411,18 +406,21 @@ function safeErrorMessage(body) {
 function parseApiError(status, body) {
   const message = safeErrorMessage(body);
   if (status === 401 || status === 403) {
-    return `OpenAI Images 鉴权失败（HTTP ${status}）：请确认 Key 能调用所选 Gemini 图片模型。${message ? ` ${message}` : ""}`;
+    return `OpenAI Chat Completions 鉴权失败（HTTP ${status}）：请确认 Key 能调用所选 Gemini 图片模型。${message ? ` ${message}` : ""}`;
   }
-  return `88API OpenAI Images 请求失败（HTTP ${status}）：${message || "未知错误"}`;
+  return `88API Chat Completions 请求失败（HTTP ${status}）：${message || "未知错误"}`;
 }
 
-async function callImagesApi({ apiKey, endpoint, body, headers = {} }) {
+async function callChatCompletionsApi({ apiKey, body }) {
   let response;
   try {
-    response = await fetchWithTimeout(endpoint, {
+    response = await fetchWithTimeout(CHAT_COMPLETIONS_URL, {
       method: "POST",
-      headers: { authorization: `Bearer ${apiKey}`, ...headers },
-      body,
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
     });
   } catch (error) {
     if (String(error?.message || "").startsWith("[NO-RETRY]")) throw error;
@@ -447,16 +445,10 @@ async function callImagesApi({ apiKey, endpoint, body, headers = {} }) {
 }
 
 async function requestImage({ apiKey, options, references }) {
-  if (references.length === 0) {
-    const body = buildGenerationBody(options);
-    return callImagesApi({
-      apiKey,
-      endpoint: GENERATIONS_URL,
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-  }
-  return callImagesApi({ apiKey, endpoint: EDITS_URL, body: buildEditForm(options, references) });
+  return callChatCompletionsApi({
+    apiKey,
+    body: buildChatCompletionsBody(options, references),
+  });
 }
 
 async function downloadImage(url, apiKey) {
@@ -523,17 +515,34 @@ async function saveParsedImages(parsed, outputDir, apiKey, requestIndex) {
 }
 
 function printHelp() {
-  console.log(`88api-Nano-Banana ${PLUGIN_VERSION}\n\n协议：OpenAI Images（唯一协议）\n生成：POST ${GENERATIONS_URL}\n编辑：POST ${EDITS_URL}\n\n配置：\n  --get-config\n  --config-path\n  --set-key <KEY>\n  --set-model <MODEL>\n  --list-models\n\n生图或编辑：\n  --prompt <TEXT> [--model MODEL] [--image PATH ...] [--aspect RATIO] [--resolution 1K] [--count 1..${MAX_IMAGES}] [--output-dir DIR]\n\n验证：\n  --dry-run\n  --self-test`);
+  console.log(`88api-Nano-Banana ${PLUGIN_VERSION}\n\n协议：OpenAI Chat Completions（唯一协议）\n请求：POST ${CHAT_COMPLETIONS_URL}\n\n配置：\n  --get-config\n  --config-path\n  --set-key <KEY>\n  --set-model <MODEL>\n  --list-models\n\n生图或编辑：\n  --prompt <TEXT> [--model MODEL] [--image PATH ...] [--aspect RATIO] [--resolution 1K|2K|4K] [--count 1..${MAX_IMAGES}] [--output-dir DIR]\n\n验证：\n  --dry-run\n  --self-test`);
 }
 
 function runSelfTest() {
   const fakePng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z5ZkAAAAASUVORK5CYII=";
   const fakeGif = "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
-  const generation = buildGenerationBody({ model: DEFAULT_MODEL, prompt: "测试", aspect: "16:9", resolution: "1K" });
-  const structured = parseImagesResponse({ data: [{ b64_json: fakePng }] });
-  const fallback = parseImagesResponse({ output: `![draft](data:image/png;base64,${fakePng})\n![final](data:image/gif;base64,${fakeGif})` });
+  const options = { model: DEFAULT_MODEL, prompt: "测试", aspect: "16:9", resolution: "4K" };
+  const generation = buildChatCompletionsBody(options, []);
+  const reference = {
+    name: "reference.png",
+    mimeType: "image/png",
+    data: Buffer.from(fakePng, "base64"),
+    bytes: Buffer.from(fakePng, "base64").length,
+  };
+  const edit = buildChatCompletionsBody(options, [reference]);
+  const structured = parseChatCompletionsResponse({ data: [{ b64_json: fakePng }] });
+  const chatImage = parseChatCompletionsResponse({
+    choices: [{ message: { images: [{ type: "image_url", image_url: { url: `data:image/png;base64,${fakePng}` } }] } }],
+  });
+  const inlineImage = parseChatCompletionsResponse({
+    choices: [{ message: { content: [{ inline_data: { mime_type: "image/png", data: fakePng } }] } }],
+  });
+  const directUrlImage = parseChatCompletionsResponse({
+    choices: [{ message: { content: "https://example.com/final.png" } }],
+  });
+  const fallback = parseChatCompletionsResponse({ choices: [{ message: { content: `![draft](data:image/png;base64,${fakePng})\n![final](data:image/gif;base64,${fakeGif})` } }] });
   const longBase64 = "A".repeat(1_250_000);
-  const longText = parseImagesResponse({ output: `data:image/jpeg;base64,${longBase64}` });
+  const longText = parseChatCompletionsResponse({ choices: [{ message: { content: `data:image/jpeg;base64,${longBase64}` } }] });
   const tempConfig = join(tmpdir(), `88api-nano-banana-self-test-${process.pid}-${Date.now()}.json`);
   try {
     atomicWriteJson(tempConfig, {
@@ -542,10 +551,27 @@ function runSelfTest() {
     const legacyConfig = loadConfig(tempConfig);
     saveConfig(legacyConfig, tempConfig);
     const persisted = JSON.parse(readFileSync(tempConfig, "utf8"));
-    const ok = generation.size === "1536x864"
-      && generation.n === 1
+    const imageConfig = generation.extra_body?.google?.image_config;
+    const editContent = edit.messages?.[0]?.content;
+    const ok = generation.messages?.[0]?.role === "user"
+      && typeof generation.messages?.[0]?.content === "string"
+      && generation.modalities?.join(",") === "text,image"
+      && imageConfig?.aspect_ratio === "16:9"
+      && imageConfig?.image_size === "4K"
+      && Array.isArray(editContent)
+      && editContent[0]?.type === "text"
+      && editContent[1]?.type === "image_url"
+      && editContent[1]?.image_url?.url.startsWith("data:image/png;base64,")
+      && !Object.hasOwn(generation, "size")
+      && !Object.hasOwn(generation, "n")
       && structured.images.length === 1
       && structured.images[0].source === "images-b64_json"
+      && chatImage.images.length === 1
+      && chatImage.images[0].mimeType === "image/png"
+      && inlineImage.images.length === 1
+      && inlineImage.images[0].source === "chat-image-base64"
+      && directUrlImage.images.length === 1
+      && directUrlImage.images[0].source === "chat-image-url"
       && fallback.images.length === 1
       && fallback.images[0].mimeType === "image/gif"
       && fallback.discardedCount === 1
@@ -555,15 +581,17 @@ function runSelfTest() {
       && !Object.hasOwn(persisted, "protocol")
       && !Object.hasOwn(persisted, "maxTokens")
       && persisted.model === "gemini-3-pro-image"
-      && GENERATIONS_URL === "https://88api.ai/v1/images/generations"
-      && EDITS_URL === "https://88api.ai/v1/images/edits";
+      && CHAT_COMPLETIONS_URL === "https://88api.ai/v1/chat/completions";
     if (!ok) throw new Error("自测断言失败");
   } finally {
     rmSync(tempConfig, { force: true });
   }
   console.log(JSON.stringify({
-    OpenAIImages生成请求: "通过",
-    OpenAIImages编辑契约: "通过",
+    ChatCompletions生成请求: "通过",
+    ChatCompletions参考图请求: "通过",
+    图像参数映射: "通过（aspect_ratio / image_size）",
+    Chat图片字段解析: "通过",
+    GeminiInlineData解析: "通过",
     标准b64_json解析: "通过",
     超长文本图片解析: "通过（1,250,000 Base64 字符）",
     旧配置迁移: "通过（已删除旧协议字段）",
@@ -606,21 +634,16 @@ async function main() {
   if (!Number.isInteger(count) || count < 1 || count > MAX_IMAGES) throw new Error(`--count 必须是 1..${MAX_IMAGES} 的整数`);
   const references = loadReferenceImages(flags.images);
   const options = { model, prompt: flags.prompt, aspect, resolution };
-  const endpoint = references.length > 0 ? EDITS_URL : GENERATIONS_URL;
+  const endpoint = CHAT_COMPLETIONS_URL;
 
   if (flags.dryRun) {
-    const request = references.length > 0
-      ? {
-        fields: editFields(options),
-        images: references.map(({ name, mimeType, bytes }) => ({ field: "image[]", name, mimeType, bytes })),
-      }
-      : { body: buildGenerationBody(options) };
     console.log(JSON.stringify({
       method: "POST",
-      protocol: "OpenAI Images",
+      protocol: "OpenAI Chat Completions",
       url: endpoint,
-      headers: { authorization: "Bearer <已隐藏>", ...(references.length ? {} : { "content-type": "application/json" }) },
-      ...request,
+      headers: { authorization: "Bearer <已隐藏>", "content-type": "application/json" },
+      body: buildChatCompletionsBody(options, references, { redactImageData: true }),
+      referenceImages: references.map(({ name, mimeType, bytes }) => ({ name, mimeType, bytes })),
       paidRequests: count,
     }, null, 2));
     return;
@@ -633,7 +656,7 @@ async function main() {
   let discardedImages = 0;
   for (let requestIndex = 1; requestIndex <= count; requestIndex += 1) {
     const responseBody = await requestImage({ apiKey, options, references });
-    const parsed = parseImagesResponse(responseBody);
+    const parsed = parseChatCompletionsResponse(responseBody);
     discardedImages += parsed.discardedCount;
     if (!parsed.images.length) {
       const responseText = parsed.text.join("\n").slice(0, 2000);
@@ -646,11 +669,10 @@ async function main() {
   }
   console.log(JSON.stringify({
     model,
-    protocol: "OpenAI Images",
+    protocol: "OpenAI Chat Completions",
     endpoint,
     requestedAspect: aspect,
     requestedResolution: resolution,
-    requestedSize: resolveSize(aspect, resolution),
     requests: count,
     count: allSaved.length,
     discardedImages,

@@ -1,6 +1,6 @@
 # 88api-Nano-Banana
 
-来自 [88api.ai](https://88api.ai/) Token 聚合站的 Codex 专用 Gemini 生图插件。它通过 **OpenAI Images** 协议生成和编辑图片，并将结果直接保存到本地。
+来自 [88api.ai](https://88api.ai/) Token 聚合站的 Codex 专用 Gemini 生图插件。它通过 **OpenAI Chat Completions** 协议生成和编辑图片，并将结果直接保存到本地。
 
 可调用：
 
@@ -21,20 +21,47 @@
 
 ## API 协议
 
-从 `v1.2.0` 开始，插件仅使用 OpenAI Images 协议：
+从 `v1.3.0` 开始，插件仅使用 OpenAI Chat Completions 协议：
 
 | 场景 | 端点 | 请求格式 |
 | --- | --- | --- |
-| 文生图 | `https://88api.ai/v1/images/generations` | JSON |
-| 参考图编辑 | `https://88api.ai/v1/images/edits` | multipart，参考图字段为 `image[]` |
+| 文生图 | `https://88api.ai/v1/chat/completions` | JSON，`messages` 使用文本内容 |
+| 参考图编辑 | `https://88api.ai/v1/chat/completions` | JSON，`messages` 使用文本与 `image_url` 内容块 |
 
-两个端点都使用 `Authorization: Bearer <KEY>`。
+请求使用 `Authorization: Bearer <KEY>` 和 `Content-Type: application/json`。
+
+核心请求格式：
+
+```json
+{
+  "model": "gemini-3.1-flash-image",
+  "messages": [
+    {
+      "role": "user",
+      "content": "生成一张图片：纯白背景，中央只有一个蓝色圆形，不要文字。"
+    }
+  ],
+  "modalities": ["text", "image"],
+  "extra_body": {
+    "google": {
+      "image_config": {
+        "aspect_ratio": "16:9",
+        "image_size": "4K"
+      }
+    }
+  }
+}
+```
+
+- `aspect_ratio` 支持 `1:1`、`2:3`、`3:2`、`3:4`、`4:3`、`4:5`、`5:4`、`9:16`、`16:9`、`21:9`。
+- `image_size` 支持 `1K`、`2K`、`4K`。
+- 参考图会按输入顺序转换成 `image_url` Data URI，与文字一起放入同一条用户消息。
 
 ## 环境
 
 - Codex 插件功能
 - Node.js 18 或更高版本
-- 能通过 OpenAI Images 调用上述 Gemini 图片模型的 88api.ai Key
+- 能通过 OpenAI Chat Completions 调用上述 Gemini 图片模型的 88api.ai Key
 
 ## 创建并配置 88API Key
 
@@ -71,7 +98,7 @@ https://github.com/blackdm666/88api-Nano-Banana
 1. 从上面的 GitHub 仓库安装或更新插件，不要安装同名的其他来源。
 2. 使用插件自带的 scripts/generate.mjs，通过 --set-key 将 Key 保存到插件专用配置文件。
 3. 不要在回复、命令输出、日志或项目文件中完整显示 Key，只允许显示脱敏预览。
-4. 配置后运行 --get-config，确认 Key 已配置，并检查协议、端点和默认模型。
+4. 配置后运行 --get-config，确认 Key 已配置，并检查协议为 OpenAI Chat Completions、端点为 https://88api.ai/v1/chat/completions，同时确认默认模型。
 5. 运行 node --check、--self-test 和一次 --dry-run。不要调用付费生图接口。
 6. 最后告诉我安装版本、配置文件路径和每项验证结果，并提醒我新建 Codex 任务以加载最新版插件。
 ```
@@ -124,7 +151,7 @@ node "<PLUGIN_ROOT>\scripts\generate.mjs" --model gemini-3-pro-image --image "<�
 
 ## 超长文本图片解析
 
-正常响应使用 OpenAI Images 的 `data[].b64_json` 或 `data[].url`。如果 88API 把图片包装在百万字符级 Markdown/Data URI 文本中，插件仍会在 128 MB 响应上限内：
+正常响应从 Chat Completions 的消息内容或图片字段中读取图片。如果 88API 把图片包装在百万字符级 Markdown/Data URI 文本中，插件仍会在 128 MB 响应上限内：
 
 - 解析 Markdown/Data URI 和 URL-safe Base64；
 - 从摘要和错误中移除 Base64；
