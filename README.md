@@ -2,10 +2,14 @@
 
 来自 [88api.ai](https://88api.ai/) Token 聚合站的 Codex 专用 Gemini 生图插件。它通过 **OpenAI Chat Completions** 协议生成和编辑图片，并将结果直接保存到本地。
 
-可调用：
+插件集成两款图片模型：
 
-- `gemini-3.1-flash-image`（默认）
-- `gemini-3-pro-image`
+| 模型 | 定位 | 适合场景 |
+| --- | --- | --- |
+| `gemini-3.1-flash-image`（默认） | 速度与效率优先 | 日常文生图、快速迭代、常规参考图编辑 |
+| `gemini-3-pro-image` | 细节与复杂任务优先 | 高细节画面、复杂构图、精细文字排版、复杂参考图编辑 |
+
+普通任务会直接使用 Flash。用户明确要求高细节、最高质量、复杂构图、精细排版或复杂参考图编辑，但没有指定模型时，插件会在请求 API 前询问是否切换到 Pro；只有确认后才会使用 Pro。单次选择不会改写以后任务的默认模型。
 
 插件独立于 `88API-image-gen`，不共享 Key 或配置文件。
 
@@ -95,12 +99,13 @@ https://github.com/blackdm666/88api-Nano-Banana
 <把刚复制的完整 Key 粘贴在这里>
 
 请严格按照以下要求执行：
-1. 从上面的 GitHub 仓库安装或更新插件，不要安装同名的其他来源。
-2. 使用插件自带的 scripts/generate.mjs，通过 --set-key 将 Key 保存到插件专用配置文件。
+1. 使用 Codex 标准插件流程，从上面的 GitHub 仓库添加或更新 marketplace，再安装或更新 88api-nano-banana@88api-nano-banana，不要安装同名的其他来源。
+2. 使用插件自带的 scripts/generate.mjs，通过 --set-key 将 Key 保存到插件专用配置文件；除非我明确要求保留其他设置，再通过 --set-model gemini-3.1-flash-image 确保 Flash 是当前保存的默认模型。
 3. 不要在回复、命令输出、日志或项目文件中完整显示 Key，只允许显示脱敏预览。
-4. 配置后运行 --get-config，确认 Key 已配置，并检查协议为 OpenAI Chat Completions、端点为 https://88api.ai/v1/chat/completions，同时确认默认模型。
+4. 配置后运行 --get-config 和 --list-models，确认 Key 已配置，协议为 OpenAI Chat Completions，端点为 https://88api.ai/v1/chat/completions，当前保存模型和出厂默认模型均为 gemini-3.1-flash-image，并确认同时支持 gemini-3-pro-image。
 5. 运行 node --check、--self-test 和一次 --dry-run。不要调用付费生图接口。
-6. 最后告诉我安装版本、配置文件路径和每项验证结果，并提醒我新建 Codex 任务以加载最新版插件。
+6. 运行 codex plugin list --json，确认插件状态为 installed、enabled。
+7. 最后告诉我安装版本、配置文件路径和每项验证结果，并提醒我新建 Codex 任务，输入 @ 后从列表选择 88api-Nano-Banana 调用插件。
 ```
 
 只把 Key 粘贴到自己的 Codex 任务中，不要发布到 GitHub Issue、公开聊天、仓库文件或截图里。
@@ -118,22 +123,41 @@ node "<PLUGIN_ROOT>\scripts\generate.mjs" --get-config
 
 ## 安装
 
-把 GitHub 仓库地址交给 Codex：
-
-```text
-https://github.com/blackdm666/88api-Nano-Banana
-```
-
-也可以手动安装：
+首次安装使用 Codex 标准 marketplace 流程：
 
 ```powershell
 codex plugin marketplace add blackdm666/88api-Nano-Banana
 codex plugin add 88api-nano-banana@88api-nano-banana
+codex plugin list --json
 ```
 
-安装或升级后新建 Codex 任务，使技能列表重新加载。
+已添加过该 marketplace 时，先刷新仓库快照，再重新安装插件版本：
+
+```powershell
+codex plugin marketplace upgrade 88api-nano-banana
+codex plugin add 88api-nano-banana@88api-nano-banana
+codex plugin list --json
+```
+
+`plugin list` 中应显示 `88api-nano-banana` 已安装并启用。安装或升级后必须新建 Codex 任务，使插件和技能列表重新加载。
+
+## 在 Codex 中通过 @ 调用
+
+在新任务的输入框中输入 `@`，从菜单中选择 **88api-Nano-Banana**，然后继续写自然语言需求。例如：
+
+```text
+@88api-Nano-Banana 生成一张 16:9 的科技产品海报，4K。
+```
+
+如果 `@` 菜单里没有出现插件，依次确认：
+
+1. `codex plugin list --json` 中插件是 `installed`、`enabled`。
+2. marketplace 已通过 `codex plugin marketplace upgrade 88api-nano-banana` 刷新。
+3. 安装或升级后已经新建任务，而不是继续使用升级前打开的旧任务。
 
 ## 使用
+
+不指定 `--model` 时使用保存的默认模型；首次安装的默认值是 `gemini-3.1-flash-image`。一次任务需要 Pro 时传入 `--model gemini-3-pro-image`，只有明确要求改变长期默认时才使用 `--set-model`。
 
 文生图：
 

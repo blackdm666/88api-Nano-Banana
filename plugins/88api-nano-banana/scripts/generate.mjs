@@ -16,11 +16,25 @@ import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path
 
 const API_ROOT = "https://88api.ai";
 const CHAT_COMPLETIONS_URL = `${API_ROOT}/v1/chat/completions`;
-const PLUGIN_VERSION = "1.3.0";
+const PLUGIN_VERSION = "1.3.1";
 const CONFIG_PATH = join(homedir(), ".codex", "88api-nano-banana-config.json");
 const DEFAULT_OUTPUT_DIR = join(homedir(), "Pictures", "88api-nano-banana");
 const DEFAULT_MODEL = "gemini-3.1-flash-image";
-const MODELS = new Set(["gemini-3-pro-image", "gemini-3.1-flash-image"]);
+const MODEL_INFO = [
+  {
+    id: "gemini-3.1-flash-image",
+    default: true,
+    profile: "速度与效率优先",
+    recommendedFor: ["日常文生图", "快速迭代", "常规参考图编辑"],
+  },
+  {
+    id: "gemini-3-pro-image",
+    default: false,
+    profile: "细节与复杂任务优先",
+    recommendedFor: ["高细节画面", "复杂构图", "精细文字排版", "复杂参考图编辑"],
+  },
+];
+const MODELS = new Set(MODEL_INFO.map(({ id }) => id));
 const ASPECTS = new Set(["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]);
 const RESOLUTIONS = new Set(["1K", "2K", "4K"]);
 const MAX_IMAGES = 4;
@@ -91,7 +105,9 @@ function configSummary(config) {
     BaseURL: API_ROOT,
     协议: "OpenAI Chat Completions",
     请求端点: CHAT_COMPLETIONS_URL,
-    模型: config.model,
+    当前保存模型: config.model,
+    出厂默认模型: DEFAULT_MODEL,
+    可用模型: MODEL_INFO.map(({ id }) => id),
     输出目录: config.outputDir || DEFAULT_OUTPUT_DIR,
   };
 }
@@ -515,7 +531,7 @@ async function saveParsedImages(parsed, outputDir, apiKey, requestIndex) {
 }
 
 function printHelp() {
-  console.log(`88api-Nano-Banana ${PLUGIN_VERSION}\n\n协议：OpenAI Chat Completions（唯一协议）\n请求：POST ${CHAT_COMPLETIONS_URL}\n\n配置：\n  --get-config\n  --config-path\n  --set-key <KEY>\n  --set-model <MODEL>\n  --list-models\n\n生图或编辑：\n  --prompt <TEXT> [--model MODEL] [--image PATH ...] [--aspect RATIO] [--resolution 1K|2K|4K] [--count 1..${MAX_IMAGES}] [--output-dir DIR]\n\n验证：\n  --dry-run\n  --self-test`);
+  console.log(`88api-Nano-Banana ${PLUGIN_VERSION}\n\n协议：OpenAI Chat Completions（唯一协议）\n请求：POST ${CHAT_COMPLETIONS_URL}\n默认模型：${DEFAULT_MODEL}\n\n配置：\n  --get-config\n  --config-path\n  --set-key <KEY>\n  --set-model <MODEL>\n  --list-models\n\n生图或编辑：\n  --prompt <TEXT> [--model MODEL] [--image PATH ...] [--aspect RATIO] [--resolution 1K|2K|4K] [--count 1..${MAX_IMAGES}] [--output-dir DIR]\n\n验证：\n  --dry-run\n  --self-test`);
 }
 
 function runSelfTest() {
@@ -581,6 +597,10 @@ function runSelfTest() {
       && !Object.hasOwn(persisted, "protocol")
       && !Object.hasOwn(persisted, "maxTokens")
       && persisted.model === "gemini-3-pro-image"
+      && MODEL_INFO.length === 2
+      && MODEL_INFO.find(({ default: isDefault }) => isDefault)?.id === DEFAULT_MODEL
+      && MODELS.has("gemini-3.1-flash-image")
+      && MODELS.has("gemini-3-pro-image")
       && CHAT_COMPLETIONS_URL === "https://88api.ai/v1/chat/completions";
     if (!ok) throw new Error("自测断言失败");
   } finally {
@@ -590,6 +610,7 @@ function runSelfTest() {
     ChatCompletions生成请求: "通过",
     ChatCompletions参考图请求: "通过",
     图像参数映射: "通过（aspect_ratio / image_size）",
+    双模型目录: "通过（默认 Flash，可选 Pro）",
     Chat图片字段解析: "通过",
     GeminiInlineData解析: "通过",
     标准b64_json解析: "通过",
@@ -604,7 +625,7 @@ async function main() {
   if (flags.help || process.argv.length === 2) return printHelp();
   if (flags.selfTest) return runSelfTest();
   if (flags.configPath) return console.log(CONFIG_PATH);
-  if (flags.listModels) return console.log([...MODELS].join("\n"));
+  if (flags.listModels) return console.log(JSON.stringify(MODEL_INFO, null, 2));
 
   const config = loadConfig(CONFIG_PATH, { create: flags.getConfig === true });
   if (flags.getConfig) return console.log(JSON.stringify(configSummary(config), null, 2));
