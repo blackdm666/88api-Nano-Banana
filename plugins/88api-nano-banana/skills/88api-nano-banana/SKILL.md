@@ -1,6 +1,6 @@
 ---
 name: 88api-nano-banana
-description: Generate or edit raster images through 88api.ai with Gemini image models over the OpenAI Chat Completions API. Use for Nano Banana generation, reference-image editing, or very long Base64/Data-URI image responses.
+description: Generate or edit raster images through 88api.ai with Gemini 3.1 Flash Image or Gemini 3 Pro Image over the OpenAI Chat Completions API. Use for Nano Banana generation, complex or high-detail image work, reference-image editing, or very long Base64/Data-URI image responses.
 ---
 
 # 88API Nano Banana
@@ -35,9 +35,22 @@ Never silently switch endpoints, models, or resend an accepted/unknown paid requ
 
 ## Model selection
 
-- Default to `gemini-3.1-flash-image` for normal generation, iteration, and lower latency.
-- Use `gemini-3-pro-image` when the user prioritizes composition, typography, complex editing, or maximum quality.
-- Persist a model only when requested with `--set-model gemini-3-pro-image`.
+The plugin supports exactly two image models:
+
+- `gemini-3.1-flash-image` is the factory and initial saved default. Use it without asking for ordinary generation, quick iteration, and routine reference-image editing.
+- `gemini-3-pro-image` prioritizes fine detail and complex work. It is suited to dense scenes, many subjects or constraints, precise typography or layout, identity-sensitive multi-reference edits, and requests for maximum quality.
+
+Before any paid request, apply this selection flow:
+
+1. Read the current saved model from `--get-config`. A model deliberately persisted with `--set-model` is the user's selected default and should be respected.
+2. If the user explicitly selected Flash or Pro for the current task, use that model and do not ask again.
+3. If the task is ordinary and neither the task nor saved configuration overrides the factory default, use `gemini-3.1-flash-image` directly.
+4. If the current effective default is Flash and the user asks for high detail, maximum quality, a complex composition, precise text/layout, or complex reference editing without selecting a model, pause before calling the API and ask: `这个任务对细节或复杂度要求较高。是否切换到 gemini-3-pro-image？Pro 更适合复杂画面，但通常更慢、成本更高；不切换则继续使用默认 Flash。`
+5. Wait for the answer. Use Pro only after confirmation; otherwise continue with Flash. Do not send a paid request while waiting.
+
+A one-time model choice must use `--model` and must not change future defaults. Persist a model with `--set-model` only when the user explicitly asks to change the plugin's saved default.
+
+Run `--list-models` when a user wants the machine-readable model capability list.
 
 ## Generate an image
 
