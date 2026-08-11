@@ -3,7 +3,7 @@ name: 88api-nano-banana
 description: Generate or edit raster images through 88api.ai with Gemini 3.1 Flash Image or Gemini 3 Pro Image over the OpenAI Chat Completions API. Use for Nano Banana generation, complex or high-detail image work, reference-image editing, or very long Base64/Data-URI image responses.
 ---
 
-# 88API Nano Banana
+# 88API-Nano-Banana
 
 Use the bundled `scripts/generate.mjs`. Resolve the plugin root from this installed `SKILL.md` location (two directories above the skill directory); never assume the plugin lives under `$HOME/plugins`.
 

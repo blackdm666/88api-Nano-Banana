@@ -1,4 +1,4 @@
-# 88api-Nano-Banana
+# 88API-Nano-Banana
 
 来自 [88api.ai](https://88api.ai/) Token 聚合站的 Codex 专用 Gemini 生图插件。它通过 **OpenAI Chat Completions** 协议生成和编辑图片，并将结果直接保存到本地。
 
@@ -11,7 +11,7 @@
 
 普通任务会直接使用 Flash。用户明确要求高细节、最高质量、复杂构图、精细排版或复杂参考图编辑，但没有指定模型时，插件会在请求 API 前询问是否切换到 Pro；只有确认后才会使用 Pro。单次选择不会改写以后任务的默认模型。
 
-插件独立于 `88API-image-gen`，不共享 Key 或配置文件。
+插件独立于 `88API-Image-Gen`，不共享 Key 或配置文件。
 
 ## 选择适合你的方式
 
@@ -90,7 +90,7 @@
 不会手动配置时，复制下面整个提示词到一个新的 Codex 任务中，再把 `<把刚复制的完整 Key 粘贴在这里>` 替换为自己的 Key。Codex 会完成安装、配置和非付费验证。
 
 ```text
-请帮我安装并配置最新版 88api-Nano-Banana 插件。
+请帮我安装并配置最新版 88API-Nano-Banana 插件。
 
 插件仓库：
 https://github.com/blackdm666/88api-Nano-Banana
@@ -105,7 +105,7 @@ https://github.com/blackdm666/88api-Nano-Banana
 4. 配置后运行 --get-config 和 --list-models，确认 Key 已配置，协议为 OpenAI Chat Completions，端点为 https://88api.ai/v1/chat/completions，当前保存模型和出厂默认模型均为 gemini-3.1-flash-image，并确认同时支持 gemini-3-pro-image。
 5. 运行 node --check、--self-test 和一次 --dry-run。不要调用付费生图接口。
 6. 运行 codex plugin list --json，确认插件状态为 installed、enabled。
-7. 最后告诉我安装版本、配置文件路径和每项验证结果，并提醒我新建 Codex 任务，输入 @ 后从列表选择 88api-Nano-Banana 调用插件。
+7. 最后告诉我安装版本、配置文件路径和每项验证结果，并提醒我新建 Codex 任务，输入 @ 后从列表选择 88API-Nano-Banana 调用插件。
 ```
 
 只把 Key 粘贴到自己的 Codex 任务中，不要发布到 GitHub Issue、公开聊天、仓库文件或截图里。
@@ -143,10 +143,10 @@ codex plugin list --json
 
 ## 在 Codex 中通过 @ 调用
 
-在新任务的输入框中输入 `@`，从菜单中选择 **88api-Nano-Banana**，然后继续写自然语言需求。例如：
+在新任务的输入框中输入 `@`，从菜单中选择 **88API-Nano-Banana**，然后继续写自然语言需求。例如：
 
 ```text
-@88api-Nano-Banana 生成一张 16:9 的科技产品海报，4K。
+@88API-Nano-Banana 生成一张 16:9 的科技产品海报，4K。
 ```
 
 如果 `@` 菜单里没有出现插件，依次确认：
