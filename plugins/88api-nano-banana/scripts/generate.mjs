@@ -531,7 +531,7 @@ async function saveParsedImages(parsed, outputDir, apiKey, requestIndex) {
 }
 
 function printHelp() {
-  console.log(`88api-Nano-Banana ${PLUGIN_VERSION}\n\n协议：OpenAI Chat Completions（唯一协议）\n请求：POST ${CHAT_COMPLETIONS_URL}\n默认模型：${DEFAULT_MODEL}\n\n配置：\n  --get-config\n  --config-path\n  --set-key <KEY>\n  --set-model <MODEL>\n  --list-models\n\n生图或编辑：\n  --prompt <TEXT> [--model MODEL] [--image PATH ...] [--aspect RATIO] [--resolution 1K|2K|4K] [--count 1..${MAX_IMAGES}] [--output-dir DIR]\n\n验证：\n  --dry-run\n  --self-test`);
+  console.log(`88API-Nano-Banana ${PLUGIN_VERSION}\n\n协议：OpenAI Chat Completions（唯一协议）\n请求：POST ${CHAT_COMPLETIONS_URL}\n默认模型：${DEFAULT_MODEL}\n\n配置：\n  --get-config\n  --config-path\n  --set-key <KEY>\n  --set-model <MODEL>\n  --list-models\n\n生图或编辑：\n  --prompt <TEXT> [--model MODEL] [--image PATH ...] [--aspect RATIO] [--resolution 1K|2K|4K] [--count 1..${MAX_IMAGES}] [--output-dir DIR]\n\n验证：\n  --dry-run\n  --self-test`);
 }
 
 function runSelfTest() {

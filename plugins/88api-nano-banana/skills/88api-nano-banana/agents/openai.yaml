@@ -1,4 +1,4 @@
 interface:
-  display_name: "88api-Nano-Banana"
+  display_name: "88API-Nano-Banana"
   short_description: "默认使用 Gemini 3.1 Flash，也支持高细节 Gemini 3 Pro"
   default_prompt: "使用 $88api-nano-banana 生成图片；默认使用 Gemini 3.1 Flash，高细节或复杂任务先询问是否切换 Gemini 3 Pro。"
