@@ -172,6 +172,16 @@ node "<PLUGIN_ROOT>\scripts\generate.mjs" --prompt "在太空中挥手的布偶�
 node "<PLUGIN_ROOT>\scripts\generate.mjs" --model gemini-3-pro-image --image "<参考图.png>" --prompt "保持主体身份，改成电影海报" --aspect 9:16 --resolution 2K
 ```
 
+批量生成不同提示词（顺序执行，整批只启动一次插件进程）：
+
+```powershell
+node "<PLUGIN_ROOT>\scripts\generate.mjs" --batch-inline "第一张提示词" "第二张提示词" "第三张提示词" --aspect 16:9 --resolution 1K
+```
+
+也可以用 `--batch prompts.json`，文件内容为字符串数组或 `{ "prompts": [...] }`。最多支持 20 条提示词；每条仍是独立付费请求。相同提示词的多张方案继续使用 `--count 1..4`。
+
+两张及以上图片必须先整理完整任务清单，再通过一条 `--count`、`--batch-inline` 或 `--batch` 命令提交。不要每张图片分别启动一次插件进程，否则 Auto 模式可能反复触发外网审批，导致后续任务尚未到达 88API 就被拦截。
+
 比例和分辨率是请求目标，不是本地强制缩放。对尺寸有硬性要求时应检查最终文件；88API 或上游模型可能调整输出尺寸。
 
 ## 超长文本图片解析
@@ -195,3 +205,18 @@ node "<PLUGIN_ROOT>\scripts\generate.mjs" --image "<参考图.png>" --prompt "�
 ```
 
 每个 `--count` 都是独立云端请求。本地卡死、Codex 崩溃、断网或图片未保存，不代表云端任务取消；已经受理或完成的请求仍可能计费。`[NO-AUTO-RETRY]` 只禁止插件自动重发；用户了解风险后明确说“重试/重新生成/再试一次”，Codex 应直接提交 1 次新请求，不强制先查使用日志。
+
+## Auto 模式与外网审批
+
+Codex Auto 模式可能在插件访问网络前发起外网执行审批。若错误明确包含“外部网络执行授权”“沙箱网络权限”“审批服务”或审批服务的 `429 Too Many Requests`，它不是 88API、Key、渠道或模型返回的限流。
+
+被审批层拦截且尚未出现 `[序号/总数] 正在向 88API 提交图片请求` 的任务没有发送到 88API，因此 88API 没有对应日志，也不会产生这部分费用；此前已经被 88API 受理的任务仍按实际结果计费。
+
+需要避免重复审批时：
+
+1. Windows 按 `Ctrl+,` 打开 Codex 设置。
+2. 进入 **General（通用）→ Permissions（权限）** 并启用 **Full access（完全访问）**。
+3. 回到任务，在输入框下方的权限菜单中选择 **Full access（完全访问）**。
+4. 将剩余图片通过一条 `--batch-inline` 或 `--batch` 命令重新提交。
+
+**安全提示：**Full access（完全访问）会取消当前任务的本地沙箱与审批边界。插件只提供解释和操作步骤，不会自动修改全局 Codex 权限。如果该选项不可用或呈灰色，可能是组织策略限制；此时使用单条批量命令，并只审批一次正式外网执行。
