@@ -12,11 +12,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
+import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 
 const API_ROOT = "https://88api.ai";
 const CHAT_COMPLETIONS_URL = `${API_ROOT}/v1/chat/completions`;
-const PLUGIN_VERSION = "1.3.1";
+const PLUGIN_VERSION = "1.3.4";
 const CONFIG_PATH = join(homedir(), ".codex", "88api-nano-banana-config.json");
 const DEFAULT_OUTPUT_DIR = join(homedir(), "Pictures", "88api-nano-banana");
 const DEFAULT_MODEL = "gemini-3.1-flash-image";
@@ -43,6 +44,8 @@ const MAX_RESPONSE_BYTES = 128 * 1024 * 1024;
 const MAX_IMAGE_BASE64_CHARS = 96 * 1024 * 1024;
 const MAX_TEXT_SUMMARY_CHARS = 4000;
 const REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
+const REQUEST_HEARTBEAT_MS = 15 * 1000;
+const HTTPS_AGENT = new HttpsAgent({ keepAlive: true, maxSockets: MAX_IMAGES });
 
 function defaultConfig() {
   return { apiKey: "", baseURL: API_ROOT, model: DEFAULT_MODEL, outputDir: "" };
@@ -251,7 +254,7 @@ function scanDataUrls(text) {
     }
     const length = end - dataStart;
     if (length > MAX_IMAGE_BASE64_CHARS) {
-      throw new Error(`[NO-RETRY] 响应中的单张文本图片超过 ${MAX_IMAGE_BASE64_CHARS} 字符安全上限`);
+      throw new Error(`[NO-AUTO-RETRY] 响应中的单张文本图片超过 ${MAX_IMAGE_BASE64_CHARS} 字符安全上限`);
     }
     if (length > 0) ranges.push({ start: match.index, dataStart, end, mimeType: match[1], data: text.slice(dataStart, end) });
     pattern.lastIndex = Math.max(end, pattern.lastIndex);
@@ -305,7 +308,7 @@ function collectTextFallback(value, result, seen = new Set(), context = { image:
   for (const [key, child] of Object.entries(value)) {
     if ((key === "b64_json" || key === "base64" || key === "data") && imageContext && typeof child === "string") {
       if (child.length > MAX_IMAGE_BASE64_CHARS) {
-        throw new Error(`[NO-RETRY] 响应中的单张 Base64 图片超过 ${MAX_IMAGE_BASE64_CHARS} 字符安全上限`);
+        throw new Error(`[NO-AUTO-RETRY] 响应中的单张 Base64 图片超过 ${MAX_IMAGE_BASE64_CHARS} 字符安全上限`);
       }
       result.images.push({
         type: "base64",
@@ -325,7 +328,7 @@ function addStructuredImage(images, candidate) {
   const url = typeof candidate.url === "string" ? candidate.url : candidate.image?.url;
   const mimeType = candidate.mime_type || candidate.mimeType || candidate.image?.mime_type || candidate.image?.mimeType;
   if (typeof base64 === "string" && base64.length > 0) {
-    if (base64.length > MAX_IMAGE_BASE64_CHARS) throw new Error(`[NO-RETRY] 响应中的单张 Base64 图片超过 ${MAX_IMAGE_BASE64_CHARS} 字符安全上限`);
+    if (base64.length > MAX_IMAGE_BASE64_CHARS) throw new Error(`[NO-AUTO-RETRY] 响应中的单张 Base64 图片超过 ${MAX_IMAGE_BASE64_CHARS} 字符安全上限`);
     images.push({ type: "base64", data: base64, mimeType: normalizeMime(mimeType), source: "images-b64_json" });
   } else if (typeof url === "string" && /^https?:\/\//i.test(url)) {
     images.push({ type: "url", url, source: "images-url" });
@@ -390,11 +393,11 @@ async function readResponseBuffer(response, maxBytes = MAX_RESPONSE_BYTES) {
   const declared = Number(response.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > maxBytes) {
     await response.body?.cancel().catch(() => {});
-    throw new Error(`[NO-RETRY] 响应体 ${declared} 字节，超过 ${maxBytes} 字节安全上限`);
+    throw new Error(`[NO-AUTO-RETRY] 响应体 ${declared} 字节，超过 ${maxBytes} 字节安全上限`);
   }
   if (!response.body?.getReader) {
     const buffer = Buffer.from(await response.arrayBuffer());
-    if (buffer.length > maxBytes) throw new Error(`[NO-RETRY] 响应体超过 ${maxBytes} 字节安全上限`);
+    if (buffer.length > maxBytes) throw new Error(`[NO-AUTO-RETRY] 响应体超过 ${maxBytes} 字节安全上限`);
     return buffer;
   }
   const reader = response.body.getReader();
@@ -406,7 +409,7 @@ async function readResponseBuffer(response, maxBytes = MAX_RESPONSE_BYTES) {
     total += value.byteLength;
     if (total > maxBytes) {
       await reader.cancel().catch(() => {});
-      throw new Error(`[NO-RETRY] 响应体超过 ${maxBytes} 字节安全上限`);
+      throw new Error(`[NO-AUTO-RETRY] 响应体超过 ${maxBytes} 字节安全上限`);
     }
     chunks.push(Buffer.from(value));
   }
@@ -427,36 +430,86 @@ function parseApiError(status, body) {
   return `88API Chat Completions 请求失败（HTTP ${status}）：${message || "未知错误"}`;
 }
 
-async function callChatCompletionsApi({ apiKey, body }) {
-  let response;
-  try {
-    response = await fetchWithTimeout(CHAT_COMPLETIONS_URL, {
+function isNoAutoRetryError(error) {
+  const message = String(error?.message || error || "");
+  return message.startsWith("[NO-AUTO-RETRY]") || message.startsWith("[NO-RETRY]");
+}
+
+function networkErrorDetails(error) {
+  const parts = [error?.message || String(error)];
+  if (error?.code) parts.push(error.code);
+  if (error?.cause?.code) parts.push(error.cause.code);
+  if (error?.cause?.message) parts.push(error.cause.message);
+  return [...new Set(parts.filter(Boolean))].join(" | ");
+}
+
+function postJsonOverHttps(url, body, apiKey, timeoutMs = REQUEST_TIMEOUT_MS, maxBytes = MAX_RESPONSE_BYTES) {
+  const payload = JSON.stringify(body);
+  return new Promise((resolvePromise, rejectPromise) => {
+    const request = httpsRequest(new URL(url), {
       method: "POST",
+      agent: HTTPS_AGENT,
       headers: {
         authorization: `Bearer ${apiKey}`,
         "content-type": "application/json",
+        "content-length": Buffer.byteLength(payload),
+        accept: "application/json",
+        "accept-encoding": "identity",
+        connection: "keep-alive",
+        "user-agent": `88api-nano-banana/${PLUGIN_VERSION}`,
       },
-      body: JSON.stringify(body),
+    }, (response) => {
+      const chunks = [];
+      let total = 0;
+      response.on("data", (chunk) => {
+        total += chunk.length;
+        if (total > maxBytes) {
+          response.destroy(new Error(`[NO-AUTO-RETRY] 响应体超过 ${maxBytes} 字节安全上限`));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on("end", () => resolvePromise({
+        status: response.statusCode || 0,
+        raw: Buffer.concat(chunks, total).toString("utf8"),
+      }));
+      response.on("aborted", () => rejectPromise(new Error("响应在完成前被服务器中断")));
+      response.on("error", rejectPromise);
     });
+    request.setTimeout(timeoutMs, () => {
+      const error = new Error(`请求超时（${Math.round(timeoutMs / 1000)} 秒）`);
+      error.name = "AbortError";
+      request.destroy(error);
+    });
+    request.on("error", rejectPromise);
+    request.end(payload);
+  });
+}
+
+async function callChatCompletionsApi({ apiKey, body }) {
+  const startedAt = Date.now();
+  const heartbeat = setInterval(() => {
+    console.log(`[等待] 88API 正在处理，已用时 ${Math.round((Date.now() - startedAt) / 1000)} 秒…`);
+  }, REQUEST_HEARTBEAT_MS);
+  heartbeat.unref();
+  let response;
+  try {
+    response = await postJsonOverHttps(CHAT_COMPLETIONS_URL, body, apiKey);
   } catch (error) {
-    if (String(error?.message || "").startsWith("[NO-RETRY]")) throw error;
-    throw new Error(`[NO-RETRY] 请求状态未知：${error?.name === "AbortError" ? "请求超时" : error?.message || String(error)}`);
+    if (isNoAutoRetryError(error)) throw error;
+    throw new Error(`[NO-AUTO-RETRY] 请求状态未知：${networkErrorDetails(error)}`);
+  } finally {
+    clearInterval(heartbeat);
   }
 
-  let raw;
-  try {
-    raw = (await readResponseBuffer(response)).toString("utf8");
-  } catch (error) {
-    if (String(error?.message || "").startsWith("[NO-RETRY]")) throw error;
-    throw new Error(`[NO-RETRY] 请求已返回响应头，但读取响应体失败：${error?.message || String(error)}`);
-  }
+  const raw = response.raw;
   let parsed;
   try {
     parsed = raw ? JSON.parse(raw) : {};
   } catch {
     parsed = raw;
   }
-  if (!response.ok) throw new Error(parseApiError(response.status, parsed));
+  if (response.status < 200 || response.status >= 300) throw new Error(parseApiError(response.status, parsed));
   return parsed;
 }
 
@@ -472,15 +525,15 @@ async function downloadImage(url, apiKey) {
   try {
     if (new URL(url).origin === new URL(API_ROOT).origin) headers.authorization = `Bearer ${apiKey}`;
   } catch {
-    throw new Error(`[NO-RETRY] 返回了无效图片地址：${url}`);
+    throw new Error(`[NO-AUTO-RETRY] 返回了无效图片地址：${url}`);
   }
   let response;
   try {
     response = await fetchWithTimeout(url, { headers }, 2 * 60 * 1000);
   } catch (error) {
-    throw new Error(`[NO-RETRY] 图片下载状态未知：${error?.message || String(error)}`);
+    throw new Error(`[NO-AUTO-RETRY] 图片下载状态未知：${error?.message || String(error)}`);
   }
-  if (!response.ok) throw new Error(`[NO-RETRY] 请求已成功，但图片下载失败：HTTP ${response.status}`);
+  if (!response.ok) throw new Error(`[NO-AUTO-RETRY] 请求已成功，但图片下载失败：HTTP ${response.status}`);
   const buffer = await readResponseBuffer(response);
   return { buffer, mimeType: normalizeMime(response.headers.get("content-type")) };
 }
@@ -501,7 +554,7 @@ function detectMime(buffer, fallback = "image/png") {
 
 function decodeBase64(data) {
   const normalized = data.replace(/\s+/g, "").replace(/-/g, "+").replace(/_/g, "/");
-  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) throw new Error("[NO-RETRY] 接口返回了无效的 Base64 图片数据");
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) throw new Error("[NO-AUTO-RETRY] 接口返回了无效的 Base64 图片数据");
   return Buffer.from(normalized, "base64");
 }
 
@@ -521,7 +574,7 @@ async function saveParsedImages(parsed, outputDir, apiKey, requestIndex) {
     const downloaded = image.type === "url" ? await downloadImage(image.url, apiKey) : null;
     const buffer = downloaded?.buffer || decodeBase64(image.data);
     const mimeType = downloaded?.mimeType || image.mimeType;
-    if (!buffer.length) throw new Error("[NO-RETRY] 接口返回了空的 Base64 图片");
+    if (!buffer.length) throw new Error("[NO-AUTO-RETRY] 接口返回了空的 Base64 图片");
     const hash = createHash("sha256").update(buffer).digest("hex");
     if (hashes.has(hash)) continue;
     hashes.add(hash);
@@ -559,6 +612,9 @@ function runSelfTest() {
   const fallback = parseChatCompletionsResponse({ choices: [{ message: { content: `![draft](data:image/png;base64,${fakePng})\n![final](data:image/gif;base64,${fakeGif})` } }] });
   const longBase64 = "A".repeat(1_250_000);
   const longText = parseChatCompletionsResponse({ choices: [{ message: { content: `data:image/jpeg;base64,${longBase64}` } }] });
+  const retryPolicyOk = isNoAutoRetryError("[NO-AUTO-RETRY] 当前请求状态未知")
+    && isNoAutoRetryError("[NO-RETRY] 旧版请求状态未知")
+    && !isNoAutoRetryError("fetch failed");
   const tempConfig = join(tmpdir(), `88api-nano-banana-self-test-${process.pid}-${Date.now()}.json`);
   try {
     atomicWriteJson(tempConfig, {
@@ -587,6 +643,7 @@ function runSelfTest() {
       && inlineImage.images.length === 1
       && inlineImage.images[0].source === "chat-image-base64"
       && directUrlImage.images.length === 1
+      && retryPolicyOk
       && directUrlImage.images[0].source === "chat-image-url"
       && fallback.images.length === 1
       && fallback.images[0].mimeType === "image/gif"
@@ -612,6 +669,8 @@ function runSelfTest() {
     图像参数映射: "通过（aspect_ratio / image_size）",
     双模型目录: "通过（默认 Flash，可选 Pro）",
     Chat图片字段解析: "通过",
+    长任务传输策略: "通过（原始 HTTPS / identity 编码 / 15 秒心跳）",
+    用户明确授权后可重新提交: "通过（仅禁止自动重试）",
     GeminiInlineData解析: "通过",
     标准b64_json解析: "通过",
     超长文本图片解析: "通过（1,250,000 Base64 字符）",
@@ -681,10 +740,10 @@ async function main() {
     discardedImages += parsed.discardedCount;
     if (!parsed.images.length) {
       const responseText = parsed.text.join("\n").slice(0, 2000);
-      throw new Error(`[NO-RETRY] 请求已成功完成，但响应中没有可保存的图片。${responseText ? ` 返回文本：${responseText}` : ""}`);
+      throw new Error(`[NO-AUTO-RETRY] 请求已成功完成，但响应中没有可保存的图片。${responseText ? ` 返回文本：${responseText}` : ""}`);
     }
     const saved = await saveParsedImages(parsed, outputDir, apiKey, requestIndex);
-    if (!saved.length) throw new Error("[NO-RETRY] 请求已成功完成，但所有返回图片均为空或重复");
+    if (!saved.length) throw new Error("[NO-AUTO-RETRY] 请求已成功完成，但所有返回图片均为空或重复");
     allSaved.push(...saved);
     for (const path of saved) console.log(`图片已保存：${path}`);
   }
@@ -702,6 +761,10 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(`ERROR: ${error?.message || String(error)}`);
+  const message = error?.message || String(error);
+  console.error(`ERROR: ${message}`);
+  if (isNoAutoRetryError(error)) {
+    console.error("提示：本次执行不会自动重发。上一次请求可能仍会计费；用户明确要求“重试/重新生成/再试一次”后，可作为一次新的付费请求提交。");
+  }
   process.exitCode = 1;
 });

@@ -29,9 +29,10 @@ OpenAI Chat Completions is the plugin's only protocol. There is no protocol sele
 - Request: `messages`, `modalities: ["text", "image"]`, and `extra_body.google.image_config`.
 - Image settings: send the selected ratio as `aspect_ratio` and `1K|2K|4K` as `image_size`.
 - Reference images: include ordered `image_url` content parts as local Data URIs in the user message.
+- Transport: use a direct HTTPS request with a 10-minute timeout, `Accept-Encoding: identity`, and local 15-second progress heartbeats. Do not set `stream: true`; the Gemini image channel may reject streamed Chat Completions even though other 88API chat channels support SSE.
 - Response: parse images from Chat Completions message content, image fields, Markdown, HTTP URLs, or Data URIs with bounded memory.
 
-Never silently switch endpoints, models, or resend an accepted/unknown paid request.
+Never silently switch endpoints, models, or automatically resend an accepted/unknown paid request.
 
 ## Model selection
 
@@ -97,12 +98,15 @@ Dry runs hide the Key and never include reference-image bytes or Base64.
 
 ## Long image responses
 
-The normal response is a Chat Completions message containing image data or links. If 88API wraps an image in a very long Markdown/Data URI string, the script scans it with bounded memory, removes Base64 from summaries, accepts standard and URL-safe Base64, and selects the last text-embedded image as the final result.
+Long-running Pro generations use a direct HTTPS/1.1 request instead of Node's high-level `fetch` path. The response requests identity encoding to avoid fragile compression/decoding of large Base64 JSON bodies, waits up to 10 minutes, and prints a local heartbeat every 15 seconds. Do not enable Chat Completions streaming for these image models: the selected Gemini image channel can return HTTP 500 for `stream: true`. Base64 is removed from summaries, standard and URL-safe Base64 are accepted, and the last text-embedded image is selected as the final result.
 
 ## Results and errors
 
 - After success, show every saved image with an absolute-path Markdown image tag.
-- Treat `[NO-RETRY]` as an accepted or unknown cloud state. Do not retry or fall back.
+- Treat `[NO-AUTO-RETRY]` as an accepted or unknown cloud state. Do not automatically retry, fall back, switch models, or silently submit a replacement in the same run.
+- `[NO-AUTO-RETRY]` is not a permanent ban on future requests. Warn that the previous request may still be billed. If the user explicitly says to retry, regenerate, resubmit, or try once more, that message authorizes exactly one new paid request; run it without requiring the user to inspect 88API logs first.
+- If the user has not explicitly authorized another paid request, ask whether they want to check the usage log or submit one new request. Never infer retry authorization only from the original request.
+- Treat legacy `[NO-RETRY]` output from an older installed version with the same rules.
 - On `401`/`403`, ask for a Key that can call the selected model through OpenAI Chat Completions.
 - If a successful response contains no saveable image, report only the sanitized text summary; never expose embedded Base64.
 - A response body is capped at 128 MB and a single text-embedded Base64 image at 96 MB to prevent local memory exhaustion.
