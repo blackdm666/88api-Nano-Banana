@@ -1,6 +1,6 @@
 ---
 name: 88api-nano-banana
-description: Generate or edit raster images through 88api.ai with Gemini 3.1 Flash Image or Gemini 3 Pro Image over the OpenAI Chat Completions API. Use for Nano Banana generation, complex or high-detail image work, reference-image editing, or very long Base64/Data-URI image responses.
+description: Generate or edit raster images through 88api.ai with Gemini 3.1 Flash Image or Gemini 3 Pro Image over the OpenAI Chat Completions API. Use for Nano Banana generation, complex or high-detail image work, reference-image editing, sequential multi-prompt batches, very long Base64/Data-URI image responses, or troubleshooting Codex Auto-mode sandbox and network-approval failures before an 88API request starts.
 ---
 
 # 88API-Nano-Banana
@@ -67,9 +67,13 @@ Optional flags:
 - `--aspect 1:1|2:3|3:2|3:4|4:3|4:5|5:4|9:16|16:9|21:9`
 - `--resolution 1K|2K|4K`
 - `--count 1..4` (each count is a separate paid request)
+- `--batch-inline "<PROMPT_1>" "<PROMPT_2>" ...` (up to 20 different prompts, sequential paid requests in one process)
+- `--batch "<PROMPTS.json>"` where the file is a JSON string array or `{ "prompts": [...] }`
 - `--output-dir "<ABSOLUTE_DIRECTORY>"`
 
-Start with `--count 1`. Warn before multiple requests: a local memory failure, crash, or lost connection does not cancel a cloud request already accepted by 88api.ai, and it may still be billed.
+Start with one request unless the user explicitly asks for multiple outputs. Warn before multiple requests: a local memory failure, crash, or lost connection does not cancel a cloud request already accepted by 88api.ai, and it may still be billed.
+
+For two or more outputs, prepare the complete task list first and invoke `generate.mjs` exactly once. Use `--count` for one repeated prompt and `--batch-inline` or `--batch` for different prompts. The batch runs sequentially and stops on the first failure; never launch one Node process per image, because repeated shell launches can trigger repeated Codex Auto-mode network approvals before later tasks reach 88API.
 
 Aspect and resolution are requested targets. Verify the saved file when exact dimensions matter; 88API or the upstream model may return a different size.
 
@@ -96,9 +100,32 @@ node "<PLUGIN_ROOT>/scripts/generate.mjs" --image "<REFERENCE>" --prompt "测试
 
 Dry runs hide the Key and never include reference-image bytes or Base64.
 
+A dry-run does not grant network access to the later paid command. Run at most one dry-run for the complete batch, then start the paid batch with one `generate.mjs` invocation. Do not dry-run each image separately.
+
 ## Long image responses
 
 Long-running Pro generations use a direct HTTPS/1.1 request instead of Node's high-level `fetch` path. The response requests identity encoding to avoid fragile compression/decoding of large Base64 JSON bodies, waits up to 10 minutes, and prints a local heartbeat every 15 seconds. Do not enable Chat Completions streaming for these image models: the selected Gemini image channel can return HTTP 500 for `stream: true`. Base64 is removed from summaries, standard and URL-safe Base64 are accepted, and the last text-embedded image is selected as the final result.
+
+## Codex Auto-mode network approval
+
+Codex Auto mode can require approval before a shell command reaches the network. This approval happens outside the plugin and may fail before Node or the 88API request starts.
+
+When the tool layer explicitly reports an external-network execution authorization error, sandbox network denial, approval-service failure, or approval-service `429 Too Many Requests`:
+
+1. Do not call it an 88API, Key, channel, or model rate limit. An 88API response is reported by the plugin as `HTTP <status>`, not as a Codex authorization-service error.
+2. Check the per-task output. A line such as `[1/6] 正在向 88API 提交图片请求` proves that task started; tasks blocked before that line were not submitted to 88API and have no corresponding 88API usage log or charge. Report earlier accepted or completed tasks separately because those may be billed.
+3. Explain the cause with this wording, adapted to the actual task counts:
+
+   > 这不是 88API 返回的 429，而是 Codex Auto 模式的外部网络执行审批在请求发出前被限流。本次被拦截的任务尚未发送到 88API，因此 88API 没有对应日志，也不会产生这部分费用；此前已经受理的任务仍按实际结果计费。
+
+4. Tell the user how to continue:
+   - Open Codex desktop settings with `Ctrl+,` on Windows.
+   - Go to **General（通用）→ Permissions（权限）** and enable **Full access（完全访问）**.
+   - Return to the task, open the permission control below the composer, and select **Full access（完全访问）**.
+   - Resubmit all remaining images in one `--batch-inline` or `--batch` invocation.
+5. Warn that Full access（完全访问） removes the local sandbox and approval boundary for that task. Let the user choose it; never edit their global Codex permission configuration silently. If Full access is unavailable or disabled, explain that an organization policy may control it and fall back to one batch command with a single approval.
+
+Do not use `[NO-AUTO-RETRY]` for a command that was clearly blocked before any request reached 88API. It is safe to resubmit only the confirmed-unstarted tasks after the user changes permissions. If submission state is unclear, preserve the unknown-state cost warning.
 
 ## Results and errors
 

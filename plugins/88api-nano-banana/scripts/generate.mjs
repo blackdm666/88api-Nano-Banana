@@ -17,7 +17,7 @@ import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path
 
 const API_ROOT = "https://88api.ai";
 const CHAT_COMPLETIONS_URL = `${API_ROOT}/v1/chat/completions`;
-const PLUGIN_VERSION = "1.3.4";
+const PLUGIN_VERSION = "1.3.5";
 const CONFIG_PATH = join(homedir(), ".codex", "88api-nano-banana-config.json");
 const DEFAULT_OUTPUT_DIR = join(homedir(), "Pictures", "88api-nano-banana");
 const DEFAULT_MODEL = "gemini-3.1-flash-image";
@@ -39,6 +39,7 @@ const MODELS = new Set(MODEL_INFO.map(({ id }) => id));
 const ASPECTS = new Set(["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]);
 const RESOLUTIONS = new Set(["1K", "2K", "4K"]);
 const MAX_IMAGES = 4;
+const MAX_BATCH_PROMPTS = 20;
 const MAX_REFERENCE_BYTES = 20 * 1024 * 1024;
 const MAX_RESPONSE_BYTES = 128 * 1024 * 1024;
 const MAX_IMAGE_BASE64_CHARS = 96 * 1024 * 1024;
@@ -134,6 +135,13 @@ function parseArgs(argv) {
     else if (arg === "--set-key") flags.setKey = valueAfter(argv, index++, arg);
     else if (arg === "--set-model") flags.setModel = valueAfter(argv, index++, arg);
     else if (arg === "--prompt") flags.prompt = valueAfter(argv, index++, arg);
+    else if (arg === "--batch") flags.batchFile = valueAfter(argv, index++, arg);
+    else if (arg === "--batch-inline") {
+      const prompts = [];
+      while (index + 1 < argv.length && !argv[index + 1].startsWith("--")) prompts.push(argv[++index]);
+      if (prompts.length === 0) throw new Error("--batch-inline 至少需要一个提示词");
+      flags.batchInline = prompts;
+    }
     else if (arg === "--model") flags.model = valueAfter(argv, index++, arg);
     else if (arg === "--aspect" || arg === "--ratio") flags.aspect = valueAfter(argv, index++, arg);
     else if (arg === "--resolution") flags.resolution = valueAfter(argv, index++, arg).toUpperCase();
@@ -143,6 +151,35 @@ function parseArgs(argv) {
     else throw new Error(`不支持的参数：${arg}`);
   }
   return flags;
+}
+
+function validatePromptList(prompts, source) {
+  if (!Array.isArray(prompts) || prompts.length === 0) throw new Error(`${source} 必须包含至少一个提示词`);
+  if (prompts.length > MAX_BATCH_PROMPTS) throw new Error(`${source} 最多支持 ${MAX_BATCH_PROMPTS} 个提示词`);
+  return prompts.map((prompt, index) => {
+    if (typeof prompt !== "string" || !prompt.trim()) throw new Error(`${source} 第 ${index + 1} 个提示词为空或不是字符串`);
+    return prompt.trim();
+  });
+}
+
+function resolvePromptList(flags) {
+  const modes = [Boolean(flags.prompt?.trim()), Boolean(flags.batchFile), Boolean(flags.batchInline)].filter(Boolean).length;
+  if (modes === 0) throw new Error("缺少 --prompt、--batch 或 --batch-inline");
+  if (modes > 1) throw new Error("--prompt、--batch 和 --batch-inline 只能选择一种");
+
+  if (flags.batchInline) {
+    if (flags.count != null) throw new Error("--count 不能与 --batch-inline 同时使用");
+    return validatePromptList(flags.batchInline, "--batch-inline");
+  }
+  if (flags.batchFile) {
+    if (flags.count != null) throw new Error("--count 不能与 --batch 同时使用");
+    const parsed = JSON.parse(readFileSync(resolve(flags.batchFile), "utf8"));
+    return validatePromptList(Array.isArray(parsed) ? parsed : parsed?.prompts, "--batch");
+  }
+
+  const count = flags.count ?? 1;
+  if (!Number.isInteger(count) || count < 1 || count > MAX_IMAGES) throw new Error(`--count 必须是 1..${MAX_IMAGES} 的整数`);
+  return Array.from({ length: count }, () => flags.prompt.trim());
 }
 
 function validateModel(model) {
@@ -584,7 +621,7 @@ async function saveParsedImages(parsed, outputDir, apiKey, requestIndex) {
 }
 
 function printHelp() {
-  console.log(`88API-Nano-Banana ${PLUGIN_VERSION}\n\n协议：OpenAI Chat Completions（唯一协议）\n请求：POST ${CHAT_COMPLETIONS_URL}\n默认模型：${DEFAULT_MODEL}\n\n配置：\n  --get-config\n  --config-path\n  --set-key <KEY>\n  --set-model <MODEL>\n  --list-models\n\n生图或编辑：\n  --prompt <TEXT> [--model MODEL] [--image PATH ...] [--aspect RATIO] [--resolution 1K|2K|4K] [--count 1..${MAX_IMAGES}] [--output-dir DIR]\n\n验证：\n  --dry-run\n  --self-test`);
+  console.log(`88API-Nano-Banana ${PLUGIN_VERSION}\n\n协议：OpenAI Chat Completions（唯一协议）\n请求：POST ${CHAT_COMPLETIONS_URL}\n默认模型：${DEFAULT_MODEL}\n\n配置：\n  --get-config\n  --config-path\n  --set-key <KEY>\n  --set-model <MODEL>\n  --list-models\n\n生图或编辑：\n  --prompt <TEXT> [--model MODEL] [--image PATH ...] [--aspect RATIO] [--resolution 1K|2K|4K] [--count 1..${MAX_IMAGES}] [--output-dir DIR]\n  --batch <PROMPTS.json> [--model MODEL] [--image PATH ...] [--aspect RATIO] [--resolution 1K|2K|4K]\n  --batch-inline <PROMPT_1> <PROMPT_2> ... (最多 ${MAX_BATCH_PROMPTS} 条，顺序执行)\n\n验证：\n  --dry-run\n  --self-test`);
 }
 
 function runSelfTest() {
@@ -615,8 +652,14 @@ function runSelfTest() {
   const retryPolicyOk = isNoAutoRetryError("[NO-AUTO-RETRY] 当前请求状态未知")
     && isNoAutoRetryError("[NO-RETRY] 旧版请求状态未知")
     && !isNoAutoRetryError("fetch failed");
+  const inlineBatch = parseArgs(["--batch-inline", "第一张", "第二张", "--aspect", "16:9"]);
+  const batchModeOk = inlineBatch.batchInline?.join(",") === "第一张,第二张"
+    && inlineBatch.aspect === "16:9"
+    && resolvePromptList({ prompt: "重复", count: 2 }).join(",") === "重复,重复";
   const tempConfig = join(tmpdir(), `88api-nano-banana-self-test-${process.pid}-${Date.now()}.json`);
+  const tempBatch = join(tmpdir(), `88api-nano-banana-batch-self-test-${process.pid}-${Date.now()}.json`);
   try {
+    atomicWriteJson(tempBatch, ["文件第一张", "文件第二张"]);
     atomicWriteJson(tempConfig, {
       apiKey: "", baseURL: API_ROOT, protocol: "legacy", model: "gemini-3-pro-image", maxTokens: 8192, outputDir: "",
     });
@@ -645,6 +688,8 @@ function runSelfTest() {
       && directUrlImage.images.length === 1
       && retryPolicyOk
       && directUrlImage.images[0].source === "chat-image-url"
+      && batchModeOk
+      && resolvePromptList({ batchFile: tempBatch }).join(",") === "文件第一张,文件第二张"
       && fallback.images.length === 1
       && fallback.images[0].mimeType === "image/gif"
       && fallback.discardedCount === 1
@@ -662,6 +707,7 @@ function runSelfTest() {
     if (!ok) throw new Error("自测断言失败");
   } finally {
     rmSync(tempConfig, { force: true });
+    rmSync(tempBatch, { force: true });
   }
   console.log(JSON.stringify({
     ChatCompletions生成请求: "通过",
@@ -671,6 +717,7 @@ function runSelfTest() {
     Chat图片字段解析: "通过",
     长任务传输策略: "通过（原始 HTTPS / identity 编码 / 15 秒心跳）",
     用户明确授权后可重新提交: "通过（仅禁止自动重试）",
+    单进程批量提示词: "通过（batch / batch-inline 顺序调度）",
     GeminiInlineData解析: "通过",
     标准b64_json解析: "通过",
     超长文本图片解析: "通过（1,250,000 Base64 字符）",
@@ -706,14 +753,11 @@ async function main() {
     return;
   }
 
-  if (!flags.prompt?.trim()) throw new Error("缺少 --prompt");
+  const prompts = resolvePromptList(flags);
   const model = validateModel(flags.model || config.model || DEFAULT_MODEL);
   const aspect = validateAspect(flags.aspect || "1:1");
   const resolution = validateResolution(flags.resolution || "1K", model);
-  const count = flags.count ?? 1;
-  if (!Number.isInteger(count) || count < 1 || count > MAX_IMAGES) throw new Error(`--count 必须是 1..${MAX_IMAGES} 的整数`);
   const references = loadReferenceImages(flags.images);
-  const options = { model, prompt: flags.prompt, aspect, resolution };
   const endpoint = CHAT_COMPLETIONS_URL;
 
   if (flags.dryRun) {
@@ -722,9 +766,12 @@ async function main() {
       protocol: "OpenAI Chat Completions",
       url: endpoint,
       headers: { authorization: "Bearer <已隐藏>", "content-type": "application/json" },
-      body: buildChatCompletionsBody(options, references, { redactImageData: true }),
+      tasks: prompts.map((prompt, index) => ({
+        index: index + 1,
+        body: buildChatCompletionsBody({ model, prompt, aspect, resolution }, references, { redactImageData: true }),
+      })),
       referenceImages: references.map(({ name, mimeType, bytes }) => ({ name, mimeType, bytes })),
-      paidRequests: count,
+      paidRequests: prompts.length,
     }, null, 2));
     return;
   }
@@ -734,7 +781,9 @@ async function main() {
   const outputDir = flags.outputDir || config.outputDir || DEFAULT_OUTPUT_DIR;
   const allSaved = [];
   let discardedImages = 0;
-  for (let requestIndex = 1; requestIndex <= count; requestIndex += 1) {
+  for (let requestIndex = 1; requestIndex <= prompts.length; requestIndex += 1) {
+    const options = { model, prompt: prompts[requestIndex - 1], aspect, resolution };
+    console.log(`[${requestIndex}/${prompts.length}] 正在向 88API 提交图片请求`);
     const responseBody = await requestImage({ apiKey, options, references });
     const parsed = parseChatCompletionsResponse(responseBody);
     discardedImages += parsed.discardedCount;
@@ -746,6 +795,7 @@ async function main() {
     if (!saved.length) throw new Error("[NO-AUTO-RETRY] 请求已成功完成，但所有返回图片均为空或重复");
     allSaved.push(...saved);
     for (const path of saved) console.log(`图片已保存：${path}`);
+    console.log(`[${requestIndex}/${prompts.length}] 已完成`);
   }
   console.log(JSON.stringify({
     model,
@@ -753,7 +803,7 @@ async function main() {
     endpoint,
     requestedAspect: aspect,
     requestedResolution: resolution,
-    requests: count,
+    requests: prompts.length,
     count: allSaved.length,
     discardedImages,
     files: allSaved,
