@@ -60,6 +60,7 @@
 - `aspect_ratio` 支持 `1:1`、`2:3`、`3:2`、`3:4`、`4:3`、`4:5`、`5:4`、`9:16`、`16:9`、`21:9`。
 - `image_size` 支持 `1K`、`2K`、`4K`。
 - 参考图会按输入顺序转换成 `image_url` Data URI，与文字一起放入同一条用户消息。
+- Pro 等长任务使用原始 HTTPS/1.1、`Accept-Encoding: identity`、10 分钟超时和每 15 秒本地心跳，避免高层 `fetch` 解码或无输出等待导致连接提前中断。Gemini 图片渠道不启用 `stream: true`。
 
 ## 环境
 
@@ -193,4 +194,4 @@ node "<PLUGIN_ROOT>\scripts\generate.mjs" --prompt "测试" --dry-run
 node "<PLUGIN_ROOT>\scripts\generate.mjs" --image "<参考图.png>" --prompt "测试编辑" --dry-run
 ```
 
-每个 `--count` 都是独立云端请求。本地卡死、Codex 崩溃、断网或图片未保存，不代表云端任务取消；已经受理或完成的请求仍可能计费。`[NO-RETRY]` 任务禁止自动重发。
+每个 `--count` 都是独立云端请求。本地卡死、Codex 崩溃、断网或图片未保存，不代表云端任务取消；已经受理或完成的请求仍可能计费。`[NO-AUTO-RETRY]` 只禁止插件自动重发；用户了解风险后明确说“重试/重新生成/再试一次”，Codex 应直接提交 1 次新请求，不强制先查使用日志。
