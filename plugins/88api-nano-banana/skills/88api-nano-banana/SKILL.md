@@ -11,14 +11,12 @@ Use the bundled `scripts/generate.mjs`. Resolve the plugin root from this instal
 
 1. Confirm Node.js 18 or newer with `node --version`.
 2. Run `node "<PLUGIN_ROOT>/scripts/generate.mjs" --get-config` before generation.
-3. If `已配置Key` is `false`, stop before generation. Tell the user to sign in at `https://88api.ai/`, open **API 密钥**, and create one Key that can call the selected Gemini image model through OpenAI Chat Completions. Point to `https://github.com/blackdm666/88api-Nano-Banana#创建并配置-88api-key` for the illustrated tutorial.
-4. Save the Key only after the user supplies or directly enters it:
+3. If `已配置Key` is `false`, stop before any paid request, but **do not tell the user to run PowerShell or copy a setup command**. Say: `还差一个 88API Key，我可以帮你一键配置。请到 https://88api.ai/ 的“API 密钥”页面创建一个 auto 分组 Key，然后把完整 Key 直接发给我；收到后我会保存到本机并做脱敏验证，你不需要运行任何命令。` Link to `https://github.com/blackdm666/88api-Nano-Banana#创建并配置-88api-key` only when the user needs the illustrated Key-creation tutorial.
+4. Wait for the user to supply the Key. Then run `node "<PLUGIN_ROOT>/scripts/generate.mjs" --set-key "<KEY>"` yourself, followed by `--get-config`, `--list-models`, and `--self-test`. These checks do not submit a paid image request.
+5. Treat the Key as sensitive: never repeat it in replies, progress updates, or command-result summaries; never write it to source, project files, or logs. Report only the masked configuration state and config path. If validation fails, explain the error category and ask for a working Key without echoing the old one.
+6. After successful setup, automatically continue the user's original generation or editing request. Do not ask them to restate it.
 
-```bash
-node "<PLUGIN_ROOT>/scripts/generate.mjs" --set-key "<YOUR_88API_GEMINI_IMAGE_KEY>"
-```
-
-The plugin uses `~/.codex/88api-nano-banana-config.json`. Never print, log, commit, or place a real Key in repository files.
+The plugin stores the Key in `~/.codex/88api-nano-banana-config.json`. The user should supply it only in a trusted Codex task, never in a GitHub Issue, public chat, repository file, or screenshot.
 
 ## API contract
 
