@@ -17,7 +17,7 @@ import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path
 
 const API_ROOT = "https://88api.ai";
 const CHAT_COMPLETIONS_URL = `${API_ROOT}/v1/chat/completions`;
-const PLUGIN_VERSION = "1.3.5";
+const PLUGIN_VERSION = "1.3.6";
 const CONFIG_PATH = join(homedir(), ".codex", "88api-nano-banana-config.json");
 const DEFAULT_OUTPUT_DIR = join(homedir(), "Pictures", "88api-nano-banana");
 const DEFAULT_MODEL = "gemini-3.1-flash-image";
@@ -777,7 +777,7 @@ async function main() {
   }
 
   const apiKey = config.apiKey || process.env.NANO_BANANA_API_KEY || "";
-  if (!apiKey) throw new Error(`尚未配置 Key。请先运行 --set-key <KEY>。配置文件：${CONFIG_PATH}`);
+  if (!apiKey) throw new Error(`尚未配置 Key。通过 Codex 使用时，请把 88API Key 发给 Agent，由 Agent 为你一键配置；无需自己运行 PowerShell。配置文件：${CONFIG_PATH}`);
   const outputDir = flags.outputDir || config.outputDir || DEFAULT_OUTPUT_DIR;
   const allSaved = [];
   let discardedImages = 0;

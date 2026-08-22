@@ -86,41 +86,23 @@
 
 ![复制 API Key](docs/assets/88api-copy-key.png)
 
-### 4. 让 Codex 自动安装并配置（推荐）
+### 4. 让 Agent 一键配置（推荐）
 
-不会手动配置时，复制下面整个提示词到一个新的 Codex 任务中，再把 `<把刚复制的完整 Key 粘贴在这里>` 替换为自己的 Key。Codex 会完成安装、配置和非付费验证。
+安装插件后，直接向 **88API-Nano-Banana** 描述生图或改图需求。Agent 会先自动检查 Key；如果尚未配置，它会主动请你提供完整 Key。你只需把 Key 发给 Agent，Agent 会自动保存、脱敏核验并继续原任务，不需要打开 PowerShell。
 
-```text
-请帮我安装并配置最新版 88API-Nano-Banana 插件。
+配置保存在 `~/.codex/88api-nano-banana-config.json`。Agent 不会在回复中显示完整 Key，验证过程也不会发起付费生图请求。
 
-插件仓库：
-https://github.com/blackdm666/88api-Nano-Banana
+只在自己信任的 Codex 任务中提供 Key，不要发布到 GitHub Issue、公开聊天、仓库文件或截图中。
 
-88API Key：
-<把刚复制的完整 Key 粘贴在这里>
-
-请严格按照以下要求执行：
-1. 使用 Codex 标准插件流程，从上面的 GitHub 仓库添加或更新 marketplace，再安装或更新 88api-nano-banana@88api-nano-banana，不要安装同名的其他来源。
-2. 使用插件自带的 scripts/generate.mjs，通过 --set-key 将 Key 保存到插件专用配置文件；除非我明确要求保留其他设置，再通过 --set-model gemini-3.1-flash-image 确保 Flash 是当前保存的默认模型。
-3. 不要在回复、命令输出、日志或项目文件中完整显示 Key，只允许显示脱敏预览。
-4. 配置后运行 --get-config 和 --list-models，确认 Key 已配置，协议为 OpenAI Chat Completions，端点为 https://88api.ai/v1/chat/completions，当前保存模型和出厂默认模型均为 gemini-3.1-flash-image，并确认同时支持 gemini-3-pro-image。
-5. 运行 node --check、--self-test 和一次 --dry-run。不要调用付费生图接口。
-6. 运行 codex plugin list --json，确认插件状态为 installed、enabled。
-7. 最后告诉我安装版本、配置文件路径和每项验证结果，并提醒我新建 Codex 任务，输入 @ 后从列表选择 88API-Nano-Banana 调用插件。
-```
-
-只把 Key 粘贴到自己的 Codex 任务中，不要发布到 GitHub Issue、公开聊天、仓库文件或截图里。
-
-### 5. 手动配置
-
-已经安装插件的用户也可以直接执行：
+<details>
+<summary>高级用户：手动配置命令</summary>
 
 ```powershell
 node "<PLUGIN_ROOT>\scripts\generate.mjs" --set-key "<YOUR_88API_GEMINI_IMAGE_KEY>"
 node "<PLUGIN_ROOT>\scripts\generate.mjs" --get-config
 ```
 
-配置保存在 `~/.codex/88api-nano-banana-config.json`。不要把真实 Key 写入仓库、文档、日志或公开聊天内容。
+</details>
 
 ## 安装
 
