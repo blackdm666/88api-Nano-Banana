@@ -1,0 +1,13 @@
+{
+  "name": "88api-nano-banana",
+  "displayName": "88API-Nano-Banana",
+  "version": "1.4.0",
+  "description": "来自 88api.ai Token 聚合站的 Nano Banana 生图插件，默认 Gemini 3.1 Flash Image，可选 Gemini 3 Pro Image，支持 1K/2K/4K、参考图编辑与批量出图。Claude Code 与 ZCode 通用。",
+  "author": {
+    "name": "88api.ai",
+    "url": "https://88api.ai/"
+  },
+  "homepage": "https://88api.ai/",
+  "repository": "https://github.com/blackdm666/88api-Nano-Banana",
+  "keywords": ["88api", "nano-banana", "gemini", "image-generation", "image-edit"]
+}
