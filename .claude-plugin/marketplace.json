@@ -1,0 +1,16 @@
+{
+  "name": "88api-nano-banana",
+  "owner": {
+    "name": "88api.ai",
+    "url": "https://88api.ai/"
+  },
+  "description": "88API Nano Banana 生图插件市场（Claude Code / ZCode）",
+  "plugins": [
+    {
+      "name": "88api-nano-banana",
+      "source": "./plugins/88api-nano-banana",
+      "description": "通过 88API 使用 Gemini 3.1 Flash Image / Gemini 3 Pro Image 生成和编辑图片。",
+      "category": "productivity"
+    }
+  ]
+}

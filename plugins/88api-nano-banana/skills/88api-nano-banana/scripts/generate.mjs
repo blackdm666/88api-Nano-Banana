@@ -5,20 +5,33 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
   statSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
+import { createServer } from "node:net";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 
 const API_ROOT = "https://88api.ai";
 const CHAT_COMPLETIONS_URL = `${API_ROOT}/v1/chat/completions`;
-const PLUGIN_VERSION = "1.3.6";
-const CONFIG_PATH = join(homedir(), ".codex", "88api-nano-banana-config.json");
+const PLUGIN_VERSION = "1.4.0";
+// 客户端无关的配置位置。API88_CONFIG_DIR 可改目录；API88_KEY 只在本次进程中覆盖 Key、不写盘。
+const CONFIG_DIR_OVERRIDDEN = Boolean(String(process.env.API88_CONFIG_DIR || "").trim());
+const CONFIG_DIR = CONFIG_DIR_OVERRIDDEN ? resolve(String(process.env.API88_CONFIG_DIR).trim()) : join(homedir(), ".88api");
+const CONFIG_PATH = join(CONFIG_DIR, "nano-banana.json");
+const JOBS_DIR = join(CONFIG_DIR, "nano-banana-jobs");
+const ENV_API_KEY = String(process.env.API88_KEY || "").trim();
+// 旧版（仅 Codex）配置：首次使用时复制到 CONFIG_PATH，不删除；旧文件存在期间每次保存同步更新，未升级的旧版插件仍可使用。
+const LEGACY_CONFIG_PATH = join(homedir(), ".codex", "88api-nano-banana-config.json");
+const JOB_LIST_LIMIT = 5;
+const DOWNLOAD_ATTEMPTS = 3;
+const DOWNLOAD_BACKOFF_MS = [2_000, 5_000];
 const DEFAULT_OUTPUT_DIR = join(homedir(), "Pictures", "88api-nano-banana");
 const DEFAULT_MODEL = "gemini-3.1-flash-image";
 const MODEL_INFO = [
@@ -78,21 +91,56 @@ function atomicWriteJson(path, value) {
   }
 }
 
-function saveConfig(config, path = CONFIG_PATH) {
-  atomicWriteJson(path, normalizeConfig(config));
+let loadedConfigSource = null;
+
+function defaultLegacyPaths(path) {
+  return path === CONFIG_PATH && !CONFIG_DIR_OVERRIDDEN ? [LEGACY_CONFIG_PATH] : [];
 }
 
-function loadConfig(path = CONFIG_PATH, { create = false } = {}) {
-  if (!existsSync(path)) {
+function legacyMirrorPaths(path) {
+  return path === CONFIG_PATH && !CONFIG_DIR_OVERRIDDEN && existsSync(LEGACY_CONFIG_PATH) ? [LEGACY_CONFIG_PATH] : [];
+}
+
+function saveConfig(config, path = CONFIG_PATH, mirrorPaths = legacyMirrorPaths(path)) {
+  const normalized = normalizeConfig(config);
+  atomicWriteJson(path, normalized);
+  for (const mirrorPath of mirrorPaths) {
+    try {
+      atomicWriteJson(mirrorPath, normalized);
+    } catch (error) {
+      console.warn(`WARNING: 已保存 ${path}，但旧版配置 ${mirrorPath} 未能同步：${error?.message || String(error)}`);
+    }
+  }
+}
+
+function loadConfig(path = CONFIG_PATH, { create = false, legacyPaths = defaultLegacyPaths(path) } = {}) {
+  const sourcePath = existsSync(path) ? path : (legacyPaths.find((legacyPath) => existsSync(legacyPath)) || null);
+  loadedConfigSource = sourcePath;
+  if (!sourcePath) {
     const config = defaultConfig();
     if (create) saveConfig(config, path);
     return config;
   }
+  let config;
   try {
-    return normalizeConfig(JSON.parse(readFileSync(path, "utf8")));
+    config = normalizeConfig(JSON.parse(readFileSync(sourcePath, "utf8")));
   } catch (error) {
-    throw new Error(`配置文件无法读取：${path} (${error?.message || String(error)})`);
+    throw new Error(`配置文件无法读取：${sourcePath} (${error?.message || String(error)})`);
   }
+  if (sourcePath !== path) {
+    saveConfig(config, path, legacyMirrorPaths(path).filter((mirrorPath) => mirrorPath !== sourcePath));
+    console.warn(`NOTICE: 已把 88API 配置从 ${sourcePath} 复制到 ${path}，旧文件保留。`);
+  }
+  return config;
+}
+
+// Key 优先级：API88_KEY > 配置文件 > 旧环境变量 NANO_BANANA_API_KEY。
+function resolveApiKey(config, envKey = ENV_API_KEY) {
+  if (envKey) return { key: envKey, source: "环境变量 API88_KEY（优先于配置文件，不写入磁盘）" };
+  if (config.apiKey) return { key: config.apiKey, source: loadedConfigSource || CONFIG_PATH };
+  const legacyEnvKey = String(process.env.NANO_BANANA_API_KEY || "").trim();
+  if (legacyEnvKey) return { key: legacyEnvKey, source: "环境变量 NANO_BANANA_API_KEY" };
+  return { key: "", source: "未配置" };
 }
 
 function maskKey(key) {
@@ -101,11 +149,15 @@ function maskKey(key) {
   return `${key.slice(0, 6)}...${key.slice(-4)}`;
 }
 
-function configSummary(config) {
+function configSummary(config, { envKey = ENV_API_KEY } = {}) {
+  const { key, source } = resolveApiKey(config, envKey);
+  const mirrors = legacyMirrorPaths(CONFIG_PATH);
   return {
     配置文件: CONFIG_PATH,
-    已配置Key: Boolean(config.apiKey || process.env.NANO_BANANA_API_KEY),
-    Key预览: maskKey(config.apiKey || process.env.NANO_BANANA_API_KEY || ""),
+    Key来源: source,
+    旧版配置同步: mirrors.length > 0 ? `${mirrors.join(", ")}（保存时同步更新，供旧版插件使用）` : "无",
+    已配置Key: Boolean(key),
+    Key预览: maskKey(key),
     BaseURL: API_ROOT,
     协议: "OpenAI Chat Completions",
     请求端点: CHAT_COMPLETIONS_URL,
@@ -148,6 +200,10 @@ function parseArgs(argv) {
     else if (arg === "--count") flags.count = Number(valueAfter(argv, index++, arg));
     else if (arg === "--output-dir") flags.outputDir = valueAfter(argv, index++, arg);
     else if (arg === "--image") flags.images.push(valueAfter(argv, index++, arg));
+    else if (arg === "--retry-download") flags.retryDownload = valueAfter(argv, index++, arg);
+    else if (arg === "--job-status") {
+      flags.jobStatus = argv[index + 1] && !argv[index + 1].startsWith("--") ? argv[++index] : true;
+    } else if (arg === "--json") flags.json = true;
     else throw new Error(`不支持的参数：${arg}`);
   }
   return flags;
@@ -480,9 +536,19 @@ function networkErrorDetails(error) {
   return [...new Set(parts.filter(Boolean))].join(" | ");
 }
 
-function postJsonOverHttps(url, body, apiKey, timeoutMs = REQUEST_TIMEOUT_MS, maxBytes = MAX_RESPONSE_BYTES) {
+// 失败时在 error.stage 上标出请求走到了哪一步：not-sent（连接没建立，请求没发出）、
+// submit（已发出但没收到响应，状态未知）、read-result（已收到响应头，读取响应体时失败）。
+function postJsonOverHttps(url, body, apiKey, { timeoutMs = REQUEST_TIMEOUT_MS, maxBytes = MAX_RESPONSE_BYTES, onResponse = null } = {}) {
   const payload = JSON.stringify(body);
-  return new Promise((resolvePromise, rejectPromise) => {
+  let connected = false;
+  let httpStatus = 0;
+  return new Promise((resolvePromise, rawReject) => {
+    const rejectPromise = (error) => {
+      const tagged = error instanceof Error ? error : new Error(String(error));
+      tagged.stage ||= !connected ? "not-sent" : (httpStatus ? "read-result" : "submit");
+      tagged.httpStatus ||= httpStatus || null;
+      rawReject(tagged);
+    };
     const request = httpsRequest(new URL(url), {
       method: "POST",
       agent: HTTPS_AGENT,
@@ -496,6 +562,8 @@ function postJsonOverHttps(url, body, apiKey, timeoutMs = REQUEST_TIMEOUT_MS, ma
         "user-agent": `88api-nano-banana/${PLUGIN_VERSION}`,
       },
     }, (response) => {
+      httpStatus = response.statusCode || 0;
+      onResponse?.(httpStatus);
       const chunks = [];
       let total = 0;
       response.on("data", (chunk) => {
@@ -513,6 +581,11 @@ function postJsonOverHttps(url, body, apiKey, timeoutMs = REQUEST_TIMEOUT_MS, ma
       response.on("aborted", () => rejectPromise(new Error("响应在完成前被服务器中断")));
       response.on("error", rejectPromise);
     });
+    request.on("socket", (socket) => {
+      // 复用的 keep-alive 连接已经握手完成；新连接要等 TLS 握手结束才算发得出去。
+      if (!socket.connecting) connected = true;
+      else socket.once("secureConnect", () => { connected = true; });
+    });
     request.setTimeout(timeoutMs, () => {
       const error = new Error(`请求超时（${Math.round(timeoutMs / 1000)} 秒）`);
       error.name = "AbortError";
@@ -523,7 +596,31 @@ function postJsonOverHttps(url, body, apiKey, timeoutMs = REQUEST_TIMEOUT_MS, ma
   });
 }
 
-async function callChatCompletionsApi({ apiKey, body }) {
+function stageError(message, stage, cause, httpStatus = null) {
+  const error = new Error(message, { cause });
+  error.stage = stage;
+  error.httpStatus = httpStatus;
+  return error;
+}
+
+// 按请求走到的阶段报错：未发出（没有扣费）、提交后状态未知、已计费但读取失败。
+function chatRequestStageError(error) {
+  if (isNoAutoRetryError(error)) return error;
+  const detail = networkErrorDetails(error);
+  const status = error?.httpStatus || null;
+  if (error?.stage === "not-sent") {
+    return stageError(`88API 请求未发出（request was not sent）：连接不上 88API（${detail}），没有扣费，可以直接重新提交`, "not-sent", error);
+  }
+  if (error?.stage === "read-result" && status >= 200 && status < 300) {
+    return stageError(`[NO-AUTO-RETRY] 请求已完成并计费，但读取结果失败（stage: read-result）：${detail}`, "read-result", error, status);
+  }
+  if (error?.stage === "read-result" && status) {
+    return stageError(`88API Chat Completions 请求失败（HTTP ${status}），读取错误响应时中断：${detail}`, "rejected", error, status);
+  }
+  return stageError(`[NO-AUTO-RETRY] 请求已发出，状态未知（stage: submit）：${detail}`, "submit", error);
+}
+
+async function callChatCompletionsApi({ apiKey, body, onResponse = null }) {
   const startedAt = Date.now();
   const heartbeat = setInterval(() => {
     console.log(`[等待] 88API 正在处理，已用时 ${Math.round((Date.now() - startedAt) / 1000)} 秒…`);
@@ -531,10 +628,9 @@ async function callChatCompletionsApi({ apiKey, body }) {
   heartbeat.unref();
   let response;
   try {
-    response = await postJsonOverHttps(CHAT_COMPLETIONS_URL, body, apiKey);
+    response = await postJsonOverHttps(CHAT_COMPLETIONS_URL, body, apiKey, { onResponse });
   } catch (error) {
-    if (isNoAutoRetryError(error)) throw error;
-    throw new Error(`[NO-AUTO-RETRY] 请求状态未知：${networkErrorDetails(error)}`);
+    throw chatRequestStageError(error);
   } finally {
     clearInterval(heartbeat);
   }
@@ -546,33 +642,73 @@ async function callChatCompletionsApi({ apiKey, body }) {
   } catch {
     parsed = raw;
   }
-  if (response.status < 200 || response.status >= 300) throw new Error(parseApiError(response.status, parsed));
+  if (response.status < 200 || response.status >= 300) throw stageError(parseApiError(response.status, parsed), "rejected", null, response.status);
   return parsed;
 }
 
-async function requestImage({ apiKey, options, references }) {
+async function requestImage({ apiKey, options, references, onResponse = null }) {
   return callChatCompletionsApi({
     apiKey,
     body: buildChatCompletionsBody(options, references),
+    onResponse,
   });
 }
 
-async function downloadImage(url, apiKey) {
+async function downloadImageOnce(url, apiKey) {
   const headers = {};
+  if (new URL(url).origin === new URL(API_ROOT).origin) headers.authorization = `Bearer ${apiKey}`;
+  const response = await fetchWithTimeout(url, { headers }, 2 * 60 * 1000);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const buffer = await readResponseBuffer(response);
+  return { buffer, mimeType: normalizeMime(response.headers.get("content-type")) };
+}
+
+function saveResultLink(url, { outputDir, requestIndex }) {
+  const resolvedDir = isAbsolute(outputDir) ? outputDir : resolve(outputDir);
+  mkdirSync(resolvedDir, { recursive: true });
+  const linkFile = join(resolvedDir, `nano-banana_${timestamp()}_${requestIndex}.pending-download.json`);
+  writeFileSync(linkFile, `${JSON.stringify({ url, outputDir: resolvedDir, requestIndex, createdAt: new Date().toISOString() }, null, 2)}\n`);
+  return linkFile;
+}
+
+// 结果是链接时：先把链接写到输出目录的 *.pending-download.json，再免费重试下载；
+// 仍失败时保留该文件，图已生成并计费，可用 --retry-download 只下载、不发新的付费请求。
+async function downloadImage(url, apiKey, linkContext = null) {
   try {
-    if (new URL(url).origin === new URL(API_ROOT).origin) headers.authorization = `Bearer ${apiKey}`;
+    new URL(url);
   } catch {
     throw new Error(`[NO-AUTO-RETRY] 返回了无效图片地址：${url}`);
   }
-  let response;
-  try {
-    response = await fetchWithTimeout(url, { headers }, 2 * 60 * 1000);
-  } catch (error) {
-    throw new Error(`[NO-AUTO-RETRY] 图片下载状态未知：${error?.message || String(error)}`);
+  const linkFile = linkContext ? saveResultLink(url, linkContext) : null;
+  let lastError = null;
+  for (let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt += 1) {
+    try {
+      const downloaded = await downloadImageOnce(url, apiKey);
+      if (linkFile) rmSync(linkFile, { force: true });
+      return downloaded;
+    } catch (error) {
+      if (isNoAutoRetryError(error)) throw error;
+      lastError = error;
+      if (attempt < DOWNLOAD_ATTEMPTS) {
+        const waitMs = DOWNLOAD_BACKOFF_MS[attempt - 1];
+        console.log(`[下载] 结果图下载失败（第 ${attempt} 次），${waitMs / 1000} 秒后免费重试：${networkErrorDetails(error)}`);
+        await new Promise((resolveWait) => setTimeout(resolveWait, waitMs));
+      }
+    }
   }
-  if (!response.ok) throw new Error(`[NO-AUTO-RETRY] 请求已成功，但图片下载失败：HTTP ${response.status}`);
-  const buffer = await readResponseBuffer(response);
-  return { buffer, mimeType: normalizeMime(response.headers.get("content-type")) };
+  const saved = linkFile ? ` 结果链接已保存到 ${linkFile}，运行 --retry-download "${linkFile}" 可免费再下载一次（链接可能约 1 小时后失效）。` : "";
+  throw stageError(`[NO-AUTO-RETRY] 图片已生成并计费，但下载失败（stage: download，已免费重试 ${DOWNLOAD_ATTEMPTS} 次）：${networkErrorDetails(lastError)}。${saved}`, "download", lastError);
+}
+
+async function retrySavedDownload(linkFile, apiKey) {
+  if (!existsSync(linkFile)) throw new Error(`链接文件不存在：${linkFile}`);
+  const link = JSON.parse(readFileSync(linkFile, "utf8"));
+  if (!/^https?:/i.test(link?.url || "")) throw new Error(`链接文件里没有结果地址：${linkFile}`);
+  const { buffer, mimeType } = await downloadImage(link.url, apiKey);
+  if (!buffer.length) throw new Error("下载到的图片为空");
+  const path = saveBuffer(buffer, mimeType, link.outputDir || DEFAULT_OUTPUT_DIR, 1, link.requestIndex || 1);
+  rmSync(linkFile, { force: true });
+  return path;
 }
 
 function timestamp() {
@@ -608,7 +744,7 @@ async function saveParsedImages(parsed, outputDir, apiKey, requestIndex) {
   const saved = [];
   const hashes = new Set();
   for (const image of parsed.images) {
-    const downloaded = image.type === "url" ? await downloadImage(image.url, apiKey) : null;
+    const downloaded = image.type === "url" ? await downloadImage(image.url, apiKey, { outputDir, requestIndex }) : null;
     const buffer = downloaded?.buffer || decodeBase64(image.data);
     const mimeType = downloaded?.mimeType || image.mimeType;
     if (!buffer.length) throw new Error("[NO-AUTO-RETRY] 接口返回了空的 Base64 图片");
@@ -620,11 +756,267 @@ async function saveParsedImages(parsed, outputDir, apiKey, requestIndex) {
   return saved;
 }
 
-function printHelp() {
-  console.log(`88API-Nano-Banana ${PLUGIN_VERSION}\n\n协议：OpenAI Chat Completions（唯一协议）\n请求：POST ${CHAT_COMPLETIONS_URL}\n默认模型：${DEFAULT_MODEL}\n\n配置：\n  --get-config\n  --config-path\n  --set-key <KEY>\n  --set-model <MODEL>\n  --list-models\n\n生图或编辑：\n  --prompt <TEXT> [--model MODEL] [--image PATH ...] [--aspect RATIO] [--resolution 1K|2K|4K] [--count 1..${MAX_IMAGES}] [--output-dir DIR]\n  --batch <PROMPTS.json> [--model MODEL] [--image PATH ...] [--aspect RATIO] [--resolution 1K|2K|4K]\n  --batch-inline <PROMPT_1> <PROMPT_2> ... (最多 ${MAX_BATCH_PROMPTS} 条，顺序执行)\n\n验证：\n  --dry-run\n  --self-test`);
+// 提交记录：每次付费运行在 JOBS_DIR 下写一个 JSON 文件，每个请求发出前先记为 submitting。
+// Agent 客户端因超时强行结束进程后，--job-status 仍能看出哪些请求可能已被受理并计费。
+let activeJobRecord = null;
+
+function writeJobRecord(record) {
+  record.updatedAt = new Date().toISOString();
+  try {
+    atomicWriteJson(record.path, record);
+  } catch (error) {
+    if (!record.writeWarned) console.warn(`WARNING: 提交记录无法写入 ${record.path}：${error?.message || String(error)}`);
+    record.writeWarned = true;
+  }
 }
 
-function runSelfTest() {
+function startJobRecord({ mode, model = null, outputDir = null }, jobsDir = JOBS_DIR) {
+  const id = `${timestamp()}_${process.pid}`;
+  const record = {
+    id,
+    path: join(jobsDir, `${id}.json`),
+    version: PLUGIN_VERSION,
+    pid: process.pid,
+    mode,
+    model,
+    outputDir,
+    startedAt: new Date().toISOString(),
+    finished: false,
+    exitCode: null,
+    requests: [],
+  };
+  writeJobRecord(record);
+  return record;
+}
+
+function jobRequestStart(fields) {
+  const record = activeJobRecord;
+  if (!record) return null;
+  const prompt = String(fields.prompt || "");
+  const entry = {
+    index: record.requests.length + 1,
+    state: "submitting",
+    ...fields,
+    prompt: prompt.length > 200 ? `${prompt.slice(0, 200)}...` : prompt,
+    startedAt: new Date().toISOString(),
+  };
+  record.requests.push(entry);
+  writeJobRecord(record);
+  return entry;
+}
+
+function jobRequestResponded(entry, status) {
+  if (!entry || !activeJobRecord) return;
+  entry.state = "responded";
+  entry.httpStatus = status;
+  writeJobRecord(activeJobRecord);
+}
+
+// 按失败阶段判断计费：没发出、88API 返回错误不收费；发出后状态不明或已出图没保存下来，按可能已计费处理。
+function jobRequestEnd(entry, { paths = null, error = null } = {}) {
+  if (!entry || !activeJobRecord) return;
+  if (paths) {
+    entry.state = "saved";
+    entry.path = paths[0] || null;
+    entry.paths = paths;
+  } else if (error?.stage === "not-sent") {
+    entry.state = "not-sent";
+  } else if (error?.stage === "submit" || entry.state === "submitting") {
+    entry.state = "unknown";
+  } else if (error?.stage === "rejected" || entry.httpStatus >= 400) {
+    entry.state = "rejected";
+  } else if (isNoAutoRetryError(error)) {
+    entry.state = "billed-not-saved";
+  } else {
+    entry.state = "empty-result";
+  }
+  if (error) {
+    entry.error = String(error?.message || error);
+    entry.noAutoRetry = isNoAutoRetryError(error);
+  }
+  entry.endedAt = new Date().toISOString();
+  writeJobRecord(activeJobRecord);
+}
+
+function finishJobRecord(exitCode) {
+  const record = activeJobRecord;
+  if (!record || record.finished) return;
+  record.finished = true;
+  record.exitCode = exitCode;
+  record.endedAt = new Date().toISOString();
+  if (record.requests.length === 0) {
+    rmSync(record.path, { force: true });
+    return;
+  }
+  writeJobRecord(record);
+}
+
+function processIsAlive(pid) {
+  if (!pid || pid === process.pid) return pid === process.pid;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+const JOB_STATE_MEANING = {
+  saved: "已出图并保存（已计费）",
+  "not-sent": "未发出，没有费用",
+  rejected: "88API 返回错误，未出图",
+  unknown: "[NO-AUTO-RETRY] 已发出、状态未知，可能已计费",
+  "billed-not-saved": "[NO-AUTO-RETRY] 已出图并计费，但结果没保存下来",
+  "empty-result": "88API 返回成功但没有可保存的图片，是否计费以 88API 使用日志为准",
+  interrupted: "[NO-AUTO-RETRY] 发出后进程被中断，状态未知，可能已计费",
+  running: "仍在进行中，请等待，不要重发",
+};
+
+// 记录里停在 submitting / responded 的请求：进程还活着就是仍在进行，进程已不在就是发出后被中断。
+function summarizeJobRecord(record, { alive = processIsAlive(record?.pid) } = {}) {
+  const running = !record.finished && alive;
+  const requests = (record.requests || []).map((entry) => {
+    let state = entry.state;
+    if (state === "submitting" || state === "responded") state = running ? "running" : "interrupted";
+    return { ...entry, state, meaning: JOB_STATE_MEANING[state] || state, mayBeBilled: ["saved", "unknown", "billed-not-saved", "empty-result", "interrupted", "running"].includes(state) };
+  });
+  const count = (state) => requests.filter((entry) => entry.state === state).length;
+  return {
+    type: "88api-image-job",
+    id: record.id,
+    path: record.path,
+    status: running ? "running" : (record.finished ? "finished" : "interrupted"),
+    mode: record.mode,
+    model: record.model,
+    startedAt: record.startedAt,
+    endedAt: record.endedAt || null,
+    exitCode: record.exitCode,
+    requestsSent: requests.filter((entry) => entry.state !== "not-sent").length,
+    saved: count("saved"),
+    notSent: count("not-sent"),
+    rejected: count("rejected"),
+    emptyResult: count("empty-result"),
+    unknown: count("unknown") + count("interrupted"),
+    billedNotSaved: count("billed-not-saved"),
+    running: count("running"),
+    noAutoRetry: requests.some((entry) => ["unknown", "interrupted", "billed-not-saved"].includes(entry.state)),
+    images: requests.filter((entry) => entry.state === "saved").flatMap((entry) => (entry.paths || [entry.path]).map((path) => ({ path, dimensions: null }))),
+    requests,
+  };
+}
+
+function readJobRecord(path) {
+  return { ...JSON.parse(readFileSync(path, "utf8")), path };
+}
+
+function listJobRecordPaths(jobsDir = JOBS_DIR) {
+  if (!existsSync(jobsDir)) return [];
+  return readdirSync(jobsDir)
+    .filter((name) => name.endsWith(".json"))
+    .sort()
+    .reverse()
+    .map((name) => join(jobsDir, name));
+}
+
+function resolveJobRecordPath(value, jobsDir = JOBS_DIR) {
+  if (existsSync(value)) return value;
+  const byId = join(jobsDir, `${value.replace(/\.json$/i, "")}.json`);
+  if (existsSync(byId)) return byId;
+  throw new Error(`找不到提交记录：${value}`);
+}
+
+function printHelp() {
+  console.log(`88API-Nano-Banana ${PLUGIN_VERSION}\n\n协议：OpenAI Chat Completions（唯一协议）\n请求：POST ${CHAT_COMPLETIONS_URL}\n默认模型：${DEFAULT_MODEL}\n\n配置：\n  --get-config\n  --config-path\n  --set-key <KEY>\n  --set-model <MODEL>\n  --list-models\n\n生图或编辑：\n  --prompt <TEXT> [--model MODEL] [--image PATH ...] [--aspect RATIO] [--resolution 1K|2K|4K] [--count 1..${MAX_IMAGES}] [--output-dir DIR]\n  --batch <PROMPTS.json> [--model MODEL] [--image PATH ...] [--aspect RATIO] [--resolution 1K|2K|4K]\n  --batch-inline <PROMPT_1> <PROMPT_2> ... (最多 ${MAX_BATCH_PROMPTS} 条，顺序执行)\n\n验证：\n  --dry-run\n  --self-test\n\n工具（不发付费请求）：\n  --job-status [任务号|记录文件]   查看付费运行里每个请求的实际状态；不带参数列出最近几次\n  --retry-download <链接文件>      免费重新下载已生成并计费的结果图\n  --json                          付费运行结束时输出一行机器可读结果\n\n配置文件：${CONFIG_PATH}（API88_CONFIG_DIR 可改目录；API88_KEY 优先于已保存的 Key）\n提交记录：${JOBS_DIR}`);
+}
+
+// 旧配置迁移与同步、Key 优先级、分阶段报错、提交记录各状态和进程中断识别；全部在临时目录里进行。
+function runConfigJobChecks() {
+  const root = join(tmpdir(), `88api-nano-banana-config-job-test-${process.pid}-${Date.now()}`);
+  const newPath = join(root, "new", "nano-banana.json");
+  const legacyPath = join(root, "legacy", "88api-nano-banana-config.json");
+  const jobsDir = join(root, "jobs");
+  const checks = {};
+  const previousRecord = activeJobRecord;
+  try {
+    atomicWriteJson(legacyPath, { apiKey: "sk-test-legacy-key", model: "gemini-3-pro-image" });
+    const migrated = loadConfig(newPath, { legacyPaths: [legacyPath] });
+    checks.migratedFromLegacy = existsSync(newPath) && existsSync(legacyPath)
+      && migrated.apiKey === "sk-test-legacy-key" && migrated.model === "gemini-3-pro-image"
+      && loadedConfigSource === legacyPath;
+    saveConfig({ ...migrated, apiKey: "sk-test-new-key" }, newPath, [legacyPath]);
+    checks.legacyMirrored = JSON.parse(readFileSync(legacyPath, "utf8")).apiKey === "sk-test-new-key"
+      && loadConfig(newPath, { legacyPaths: [legacyPath] }).apiKey === "sk-test-new-key"
+      && loadedConfigSource === newPath;
+    checks.keyPriority = resolveApiKey({ apiKey: "sk-test-config" }, "sk-test-environment").key === "sk-test-environment"
+      && resolveApiKey({ apiKey: "sk-test-config" }, "").key === "sk-test-config"
+      && !JSON.stringify(configSummary({ apiKey: "" }, { envKey: "sk-test-environment-key" })).includes("sk-test-environment-key");
+
+    const refused = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED", stage: "not-sent" });
+    const reset = Object.assign(new Error("socket hang up"), { code: "ECONNRESET", stage: "submit" });
+    const cut = Object.assign(new Error("响应在完成前被服务器中断"), { stage: "read-result", httpStatus: 200 });
+    const notSent = chatRequestStageError(refused);
+    const unknown = chatRequestStageError(reset);
+    const billed = chatRequestStageError(cut);
+    checks.stageMessages = !isNoAutoRetryError(notSent) && notSent.message.includes("request was not sent") && notSent.stage === "not-sent"
+      && isNoAutoRetryError(unknown) && unknown.message.includes("stage: submit")
+      && isNoAutoRetryError(billed) && billed.message.includes("stage: read-result");
+
+    activeJobRecord = startJobRecord({ mode: "self-test", model: DEFAULT_MODEL }, jobsDir);
+    const saved = jobRequestStart({ kind: "generation", prompt: "a" });
+    jobRequestResponded(saved, 200);
+    jobRequestEnd(saved, { paths: [join(root, "a.png"), join(root, "b.png")] });
+    jobRequestEnd(jobRequestStart({ kind: "generation", prompt: "b" }), { error: notSent });
+    const rejected = jobRequestStart({ kind: "generation", prompt: "c" });
+    jobRequestResponded(rejected, 401);
+    jobRequestEnd(rejected, { error: stageError("88API Chat Completions 请求失败（HTTP 401）", "rejected", null, 401) });
+    jobRequestEnd(jobRequestStart({ kind: "edit", prompt: "d" }), { error: unknown });
+    const lost = jobRequestStart({ kind: "generation", prompt: "e" });
+    jobRequestResponded(lost, 200);
+    jobRequestEnd(lost, { error: billed });
+    jobRequestStart({ kind: "generation", prompt: "f" });
+    const killed = summarizeJobRecord(readJobRecord(activeJobRecord.path), { alive: false });
+    checks.interruptedStates = killed.status === "interrupted"
+      && killed.requests.map((entry) => entry.state).join(",") === "saved,not-sent,rejected,unknown,billed-not-saved,interrupted"
+      && killed.saved === 1 && killed.images.length === 2 && killed.notSent === 1 && killed.rejected === 1
+      && killed.unknown === 2 && killed.billedNotSaved === 1 && killed.noAutoRetry === true
+      && killed.requests[1].mayBeBilled === false && killed.requests[5].mayBeBilled === true;
+    checks.runningWhileAlive = summarizeJobRecord(readJobRecord(activeJobRecord.path), { alive: true }).requests[5].state === "running";
+    checks.resolveById = resolveJobRecordPath(activeJobRecord.id, jobsDir) === activeJobRecord.path
+      && listJobRecordPaths(jobsDir)[0] === activeJobRecord.path;
+    finishJobRecord(0);
+    activeJobRecord = startJobRecord({ mode: "self-test-empty" }, jobsDir);
+    const emptyPath = activeJobRecord.path;
+    finishJobRecord(1);
+    checks.emptyRecordRemoved = !existsSync(emptyPath);
+  } finally {
+    activeJobRecord = previousRecord;
+    rmSync(root, { recursive: true, force: true });
+  }
+  if (!Object.values(checks).every(Boolean) || Object.keys(checks).length !== 8) {
+    throw new Error(`配置 / 提交记录自测失败：${JSON.stringify(checks)}`);
+  }
+}
+
+// 真实套接字：连接被拒绝时请求根本没发出，必须报 not-sent（不扣费），而不是状态未知。
+async function runRefusedConnectionCheck() {
+  const server = createServer();
+  await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  const { port } = server.address();
+  await new Promise((resolveClose) => server.close(resolveClose));
+  let error = null;
+  try {
+    await postJsonOverHttps(`https://127.0.0.1:${port}/v1/chat/completions`, {}, "sk-test", { timeoutMs: 5_000 });
+  } catch (caught) {
+    error = chatRequestStageError(caught);
+  }
+  if (error?.stage !== "not-sent" || isNoAutoRetryError(error)) {
+    throw new Error(`连接被拒绝的自测失败：${error?.stage} ${error?.message}`);
+  }
+}
+
+async function runSelfTest() {
+  runConfigJobChecks();
+  await runRefusedConnectionCheck();
   const fakePng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z5ZkAAAAASUVORK5CYII=";
   const fakeGif = "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
   const options = { model: DEFAULT_MODEL, prompt: "测试", aspect: "16:9", resolution: "4K" };
@@ -722,6 +1114,9 @@ function runSelfTest() {
     标准b64_json解析: "通过",
     超长文本图片解析: "通过（1,250,000 Base64 字符）",
     旧配置迁移: "通过（已删除旧协议字段）",
+    客户端无关配置: "通过（~/.88api 新路径、旧 ~/.codex 配置复制与同步、API88_KEY 优先）",
+    分阶段报错: "通过（未发出 / stage: submit / stage: read-result；真实拒绝连接判为未发出）",
+    提交记录: "通过（各请求状态、进程中断识别、--job-status 查询）",
     付费API调用: "未执行",
   }, null, 2));
 }
@@ -732,9 +1127,24 @@ async function main() {
   if (flags.selfTest) return runSelfTest();
   if (flags.configPath) return console.log(CONFIG_PATH);
   if (flags.listModels) return console.log(JSON.stringify(MODEL_INFO, null, 2));
+  if (flags.jobStatus) {
+    if (flags.jobStatus === true) {
+      const recent = listJobRecordPaths().slice(0, JOB_LIST_LIMIT).map((path) => {
+        const { requests, ...summary } = summarizeJobRecord(readJobRecord(path));
+        return summary;
+      });
+      return console.log(JSON.stringify({ jobsDir: JOBS_DIR, recent }, null, 2));
+    }
+    return console.log(JSON.stringify(summarizeJobRecord(readJobRecord(resolveJobRecordPath(flags.jobStatus))), null, 2));
+  }
 
   const config = loadConfig(CONFIG_PATH, { create: flags.getConfig === true });
   if (flags.getConfig) return console.log(JSON.stringify(configSummary(config), null, 2));
+
+  if (flags.retryDownload) {
+    const path = await retrySavedDownload(flags.retryDownload, resolveApiKey(config).key);
+    return console.log(`图片已保存：${path}`);
+  }
 
   if (flags.setKey) {
     const key = flags.setKey.trim();
@@ -776,23 +1186,45 @@ async function main() {
     return;
   }
 
-  const apiKey = config.apiKey || process.env.NANO_BANANA_API_KEY || "";
-  if (!apiKey) throw new Error(`尚未配置 Key。通过 Codex 使用时，请把 88API Key 发给 Agent，由 Agent 为你一键配置；无需自己运行 PowerShell。配置文件：${CONFIG_PATH}`);
+  const apiKey = resolveApiKey(config).key;
+  if (!apiKey) throw new Error(`尚未配置 Key。请把 88API Key 发给 Agent，由 Agent 为你一键保存和验证（不需要自己运行命令），或设置环境变量 API88_KEY。配置文件：${CONFIG_PATH}`);
   const outputDir = flags.outputDir || config.outputDir || DEFAULT_OUTPUT_DIR;
+  activeJobRecord = startJobRecord({ mode: prompts.length > 1 ? "batch" : (references.length ? "edit" : "generation"), model, outputDir });
+  console.log(`提交记录：${activeJobRecord.path}（如果本次运行被中断，用 --job-status ${activeJobRecord.id} 查看状态，不要直接重发）`);
+  process.on("exit", (code) => {
+    finishJobRecord(code);
+    if (flags.json) {
+      try {
+        writeSync(1, `${JSON.stringify(summarizeJobRecord(activeJobRecord, { alive: false }))}\n`);
+      } catch {
+        // stdout 已关闭时，结果仍在磁盘上的提交记录里。
+      }
+    }
+  });
   const allSaved = [];
   let discardedImages = 0;
   for (let requestIndex = 1; requestIndex <= prompts.length; requestIndex += 1) {
     const options = { model, prompt: prompts[requestIndex - 1], aspect, resolution };
     console.log(`[${requestIndex}/${prompts.length}] 正在向 88API 提交图片请求`);
-    const responseBody = await requestImage({ apiKey, options, references });
-    const parsed = parseChatCompletionsResponse(responseBody);
-    discardedImages += parsed.discardedCount;
-    if (!parsed.images.length) {
-      const responseText = parsed.text.join("\n").slice(0, 2000);
-      throw new Error(`[NO-AUTO-RETRY] 请求已成功完成，但响应中没有可保存的图片。${responseText ? ` 返回文本：${responseText}` : ""}`);
+    const job = jobRequestStart({ kind: references.length ? "edit" : "generation", model, aspect, resolution, prompt: options.prompt, references: references.map(({ path }) => path) });
+    let saved;
+    try {
+      const responseBody = await requestImage({ apiKey, options, references, onResponse: (status) => jobRequestResponded(job, status) });
+      const parsed = parseChatCompletionsResponse(responseBody);
+      discardedImages += parsed.discardedCount;
+      if (!parsed.images.length) {
+        const responseText = parsed.text.join("\n").slice(0, 2000);
+        throw new Error(`[NO-AUTO-RETRY] 请求已成功完成，但响应中没有可保存的图片。${responseText ? ` 返回文本：${responseText}` : ""}`);
+      }
+      saved = await saveParsedImages(parsed, outputDir, apiKey, requestIndex);
+      if (!saved.length) throw new Error("[NO-AUTO-RETRY] 请求已成功完成，但所有返回图片均为空或重复");
+    } catch (error) {
+      jobRequestEnd(job, { error });
+      if (allSaved.length) console.error(`本次运行中已保存的图片：\n${allSaved.join("\n")}`);
+      if (requestIndex < prompts.length) console.error(`剩余 ${prompts.length - requestIndex} 个提示词未提交，没有费用。`);
+      throw error;
     }
-    const saved = await saveParsedImages(parsed, outputDir, apiKey, requestIndex);
-    if (!saved.length) throw new Error("[NO-AUTO-RETRY] 请求已成功完成，但所有返回图片均为空或重复");
+    jobRequestEnd(job, { paths: saved });
     allSaved.push(...saved);
     for (const path of saved) console.log(`图片已保存：${path}`);
     console.log(`[${requestIndex}/${prompts.length}] 已完成`);
