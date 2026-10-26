@@ -1,7 +1,7 @@
 {
   "name": "88api-nano-banana",
-  "version": "1.4.0",
-  "description": "\u6765\u81ea 88api.ai Token \u805a\u5408\u7ad9\u7684 Codex \u4e13\u7528 Nano Banana \u751f\u56fe\u63d2\u4ef6\uff0c\u9ed8\u8ba4\u4f7f\u7528 Gemini 3.1 Flash Image\uff0c\u5e76\u652f\u6301 Gemini 3 Pro Image\u3002",
+  "version": "1.5.0",
+  "description": "【已停止更新，请改用 88API-Image-Gen】来自 88api.ai 的 Nano Banana 生图插件，默认 Gemini 3.1 Flash Image，并支持 Gemini 3 Pro Image。",
   "author": {
     "name": "88api.ai"
   },
@@ -10,8 +10,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "88API-Nano-Banana",
-    "shortDescription": "Gemini \u751f\u56fe\u6a21\u578b\uff0c\u652f\u6301 4K\u3001\u6587\u751f\u56fe\u3001\u56fe\u751f\u56fe\u4e0e\u6279\u91cf\u51fa\u56fe\u3002",
-    "longDescription": "\u96c6\u6210 Gemini 3.1 Flash \u548c Gemini 3 Pro \u56fe\u50cf\u6a21\u578b\uff0c\u652f\u6301\u6587\u751f\u56fe\u4e0e\u53c2\u8003\u56fe\u7f16\u8f91\u3002\u590d\u6742\u6784\u56fe\u3001\u9ad8\u7ec6\u8282\u6216\u7cbe\u7ec6\u7f16\u8f91\u4efb\u52a1\u53ef\u5728\u786e\u8ba4\u540e\u5207\u6362 Pro \u6a21\u578b\u3002",
+    "shortDescription": "已停止更新：Gemini 生图已并入 88API-Image-Gen，本插件仍可使用。",
+    "longDescription": "本插件已停止更新。Gemini 生图（含 Nano Banana 2.1）已并入 88API-Image-Gen，那里还支持 GPT Image、Grok、Seedream、Midjourney，并按 88API 模型清单自动选择参数。已安装的用户仍可继续使用本插件：集成 Gemini 3.1 Flash 和 Gemini 3 Pro 图像模型，支持文生图与参考图编辑。",
     "developerName": "88api.ai",
     "category": "Productivity",
     "capabilities": [
@@ -23,12 +23,12 @@
     "logoDark": "./assets/plugin-logo-dark.png",
     "websiteURL": "https://88api.ai/",
     "defaultPrompt": [
-      "\u4f7f\u7528 88API-Nano-Banana \u524d\u5148\u81ea\u52a8\u68c0\u67e5 88API Key\uff1b\u82e5\u672a\u914d\u7f6e\uff0c\u4e3b\u52a8\u8ba9\u6211\u63d0\u4f9b Key\uff0c\u5e76\u7531\u4f60\u4e00\u952e\u4fdd\u5b58\u548c\u8131\u654f\u9a8c\u8bc1\uff0c\u4e0d\u8981\u8ba9\u6211\u8fd0\u884c PowerShell\u3002",
-      "\u4f7f\u7528 88API-Nano-Banana \u751f\u6210\u4e00\u5f20\u56fe\u7247\uff0c\u9ed8\u8ba4\u4f7f\u7528 Gemini 3.1 Flash\u3002",
-      "\u4f7f\u7528 88API-Nano-Banana \u7f16\u8f91\u8fd9\u5f20\u53c2\u8003\u56fe\u3002",
-      "\u8fd9\u662f\u9ad8\u7ec6\u8282\u6216\u590d\u6742\u56fe\u7247\u4efb\u52a1\uff0c\u4f7f\u7528 88API-Nano-Banana \u5e76\u5148\u8be2\u95ee\u6211\u662f\u5426\u5207\u6362 Gemini 3 Pro\u3002",
-      "\u4f7f\u7528 Gemini 3 Pro Image \u5b8c\u6210\u8fd9\u4e2a\u590d\u6742\u9ad8\u7ec6\u8282\u751f\u56fe\u4efb\u52a1\u3002",
-      "\u4f7f\u7528 88API-Nano-Banana \u6279\u91cf\u751f\u6210\u8fd9\u4e9b\u56fe\u7247\uff0c\u5fc5\u987b\u901a\u8fc7\u4e00\u6b21\u63d2\u4ef6\u547d\u4ee4\u987a\u5e8f\u63d0\u4ea4\u3002"
+      "使用 88API-Nano-Banana 前先自动检查 88API Key；若未配置，主动让我提供 Key，并由你一键保存和脱敏验证，不要让我运行 PowerShell。",
+      "使用 88API-Nano-Banana 生成一张图片，默认使用 Gemini 3.1 Flash。",
+      "使用 88API-Nano-Banana 编辑这张参考图。",
+      "这是高细节或复杂图片任务，使用 88API-Nano-Banana 并先询问我是否切换 Gemini 3 Pro。",
+      "使用 Gemini 3 Pro Image 完成这个复杂高细节生图任务。",
+      "使用 88API-Nano-Banana 批量生成这些图片，必须通过一次插件命令顺序提交。"
     ]
   }
 }

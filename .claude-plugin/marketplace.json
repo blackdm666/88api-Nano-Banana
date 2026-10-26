@@ -9,7 +9,7 @@
     {
       "name": "88api-nano-banana",
       "source": "./plugins/88api-nano-banana",
-      "description": "通过 88API 使用 Gemini 3.1 Flash Image / Gemini 3 Pro Image 生成和编辑图片。",
+      "description": "已停止更新：请改用 88API-Image-Gen（blackdm666/88API-image-gen）。本插件仍可使用 Gemini 3.1 Flash / 3 Pro Image。",
       "category": "productivity"
     }
   ]

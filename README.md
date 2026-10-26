@@ -1,5 +1,8 @@
 # 88API-Nano-Banana
 
+> [!IMPORTANT]
+> **本插件已停止更新（v1.5.0 为最后一个版本）。** Gemini 生图已并入 **[88API-Image-Gen](https://github.com/blackdm666/88API-image-gen)**：同一个插件还支持 Nano Banana 2.1、GPT Image、Grok、Seedream、Midjourney，并按 88API 文档站的模型清单自动选择参数，88API 上新模型不用再等插件升级。安装 88API-Image-Gen 后，本插件保存的 Key（`~/.88api/nano-banana.json`）会自动迁移过去。已安装本插件的用户仍可继续使用，但不再增加新模型或新功能。
+
 来自 [88api.ai](https://88api.ai/) Token 聚合站的 Gemini 生图插件。它通过 **OpenAI Chat Completions** 协议生成和编辑图片，并将结果直接保存到本地。
 
 插件集成两款图片模型：
@@ -249,7 +252,7 @@ Codex Auto 模式可能在插件访问网络前发起外网执行审批。若错
 
 ## 项目信息
 
-- 版本：`1.4.0`
+- 版本：`1.5.0`（已停止更新）
 - GitHub：[blackdm666/88api-Nano-Banana](https://github.com/blackdm666/88api-Nano-Banana)
 - 插件：`88api-nano-banana@88api-nano-banana`（Codex、Claude Code、ZCode 同名）
-- 更新说明：[docs/更新说明-v1.4.0.md](docs/更新说明-v1.4.0.md)；[v1.3.6](docs/更新说明-v1.3.6.md)
+- 更新说明：[docs/更新说明-v1.5.0.md](docs/更新说明-v1.5.0.md)；[v1.4.0](docs/更新说明-v1.4.0.md)；[v1.3.6](docs/更新说明-v1.3.6.md)

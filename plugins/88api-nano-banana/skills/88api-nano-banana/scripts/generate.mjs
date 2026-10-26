@@ -20,7 +20,9 @@ import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path
 
 const API_ROOT = "https://88api.ai";
 const CHAT_COMPLETIONS_URL = `${API_ROOT}/v1/chat/completions`;
-const PLUGIN_VERSION = "1.4.0";
+const PLUGIN_VERSION = "1.5.0";
+// 本插件已停止更新：Gemini 生图并入 88API-Image-Gen（同一个 Key，自动迁移）。
+const DISCONTINUED_NOTICE = "提示：88API-Nano-Banana 已停止更新，Gemini 生图已并入 88API-Image-Gen（https://github.com/blackdm666/88API-image-gen），Key 会自动迁移。本插件仍可继续使用，但不再增加新模型。";
 // 客户端无关的配置位置。API88_CONFIG_DIR 可改目录；API88_KEY 只在本次进程中覆盖 Key、不写盘。
 const CONFIG_DIR_OVERRIDDEN = Boolean(String(process.env.API88_CONFIG_DIR || "").trim());
 const CONFIG_DIR = CONFIG_DIR_OVERRIDDEN ? resolve(String(process.env.API88_CONFIG_DIR).trim()) : join(homedir(), ".88api");
@@ -1123,6 +1125,8 @@ async function runSelfTest() {
 
 async function main() {
   const flags = parseArgs(process.argv.slice(2));
+  // 写到 stderr，不影响 --json 等机器可读输出。
+  console.error(DISCONTINUED_NOTICE);
   if (flags.help || process.argv.length === 2) return printHelp();
   if (flags.selfTest) return runSelfTest();
   if (flags.configPath) return console.log(CONFIG_PATH);
