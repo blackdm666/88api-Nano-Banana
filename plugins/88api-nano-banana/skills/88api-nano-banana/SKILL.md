@@ -1,9 +1,13 @@
 ---
 name: 88api-nano-banana
-description: Generate or edit raster images through 88api.ai with Gemini 3.1 Flash Image or Gemini 3 Pro Image over the OpenAI Chat Completions API. Use for Nano Banana generation, complex or high-detail image work, reference-image editing, sequential multi-prompt batches, very long Base64/Data-URI image responses, checking interrupted paid runs, or troubleshooting Agent-client sandbox, timeout, and network-approval failures before an 88API request starts. Works in Codex, Claude Code, ZCode, DeepSeek Harness, and other Agent clients that can run local Node.js commands.
+description: DISCONTINUED — no longer updated; 88API-Image-Gen now covers these Gemini models and every other 88API image model. Still works for existing users. Generate or edit raster images through 88api.ai with Gemini 3.1 Flash Image or Gemini 3 Pro Image over the OpenAI Chat Completions API. Use for Nano Banana generation, complex or high-detail image work, reference-image editing, sequential multi-prompt batches, very long Base64/Data-URI image responses, checking interrupted paid runs, or troubleshooting Agent-client sandbox, timeout, and network-approval failures before an 88API request starts. Works in Codex, Claude Code, ZCode, DeepSeek Harness, and other Agent clients that can run local Node.js commands.
 ---
 
 # 88API-Nano-Banana
+
+> **This plugin is no longer updated.** Gemini image generation moved to **88API-Image-Gen** (`https://github.com/blackdm666/88API-image-gen`), which also covers Nano Banana 2.1, GPT Image, Grok, Seedream and Midjourney and reads model limits from the live 88API catalog. Its Key is migrated automatically from `~/.88api/nano-banana.json`.
+>
+> If 88API-Image-Gen is installed, prefer it. Otherwise keep using this plugin as below, and mention once per conversation (in the user's language) that it is no longer updated and 88API-Image-Gen replaces it. Do not refuse or delay the user's request because of this.
 
 Use the bundled `scripts/generate.mjs`, which sits beside this `SKILL.md`. `<SKILL_DIR>` below means the absolute directory this `SKILL.md` was loaded from; never assume a fixed marketplace or skills cache path, and do not copy the script elsewhere. It runs in any Agent client that can execute a local `node` command.
 
